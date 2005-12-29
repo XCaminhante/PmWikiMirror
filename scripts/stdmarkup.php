@@ -41,12 +41,10 @@ Markup('$[phrase]', '>[=',
   '/\\$\\[(?>([^\\]]+))\\]/e', "XL(PSS('$1'))");
 
 # {$var} substitutions
-Markup('{$fmt}','>$[phrase]',
-  '/{\\$((Group|Name|Title)(spaced)?|LastModified(By|Host)?|FullName)}/e',
-  "FmtPageName('$$1',\$pagename)");
-Markup('{$var}','>{$fmt}',
-  '/{\\$(Version(Num)?|Auth(or|Id|Needed)|UrlPage|Default(Name|Group)|SiteGroup)}/e',
-  "\$GLOBALS['$1']");
+Markup('{$var}', '>$[phrase]',
+  '/\\{(!?[-\\w.\\/]*)(\\$\\w+)\\}/e', 
+  "htmlspecialchars(PageVar(\$pagename, '$2', '$1'), ENT_NOQUOTES)");
+
 Markup('if', 'fulltext',
   "/\\(:(if[^\n]*?):\\)(.*?)(?=\\(:if[^\n]*?:\\)|$)/sei",
   "CondText(\$pagename,PSS('$1'),PSS('$2'))");
@@ -54,7 +52,9 @@ Markup('if', 'fulltext',
 ## (:include:)
 Markup('include', '>if',
   '/\\(:include\\s+(\\S.*?):\\)/ei',
-  "PRR().IncludeText(\$pagename, '$1')");
+  "PRR(IncludeText(\$pagename, '$1'))");
+
+$SaveAttrPatterns['/\\(:(if|include\\s).*?:\\)/i'] = ' ';
 
 ## GroupHeader/GroupFooter handling
 Markup('nogroupheader', '>include',
@@ -65,10 +65,10 @@ Markup('nogroupfooter', '>include',
   "PZZ(\$GLOBALS['GroupFooterFmt']='')");
 Markup('groupheader', '>nogroupheader',
   '/\\(:groupheader:\\)/ei',
-  "PRR().FmtPageName(\$GLOBALS['GroupHeaderFmt'],\$pagename)");
+  "PRR(FmtPageName(\$GLOBALS['GroupHeaderFmt'],\$pagename))");
 Markup('groupfooter','>nogroupfooter',
   '/\\(:groupfooter:\\)/ei',
-  "PRR().FmtPageName(\$GLOBALS['GroupFooterFmt'],\$pagename)");
+  "PRR(FmtPageName(\$GLOBALS['GroupFooterFmt'],\$pagename))");
 
 ## (:nl:)
 Markup('nl0','<split',"/([^\n])(?>(?:\\(:nl:\\))+)([^\n])/i","$1\n$2");
@@ -126,17 +126,27 @@ Markup('&','directives','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
 ## (:title:)
 Markup('title','>&',
   '/\\(:title\\s(.*?):\\)/ei',
-  "PZZ(\$GLOBALS['PCache'][\$pagename]['title']=PSS('$1'))");
+  "PZZ(\$GLOBALS['PCache'][\$pagename]['title']
+       = \$GLOBALS['PCache'][\$pagename]['=title']
+       = PSS('$1'))");
 
-## (:keywords:)
+## (:keywords:), (:description:)
 Markup('keywords', '>&', 
-  "/\\(:keywords?\\s+([^'\n]+?):\\)/ei",
-  "PZZ(\$GLOBALS['HTMLHeaderFmt'][] = 
-    \"<meta name='keywords' content='$1' />\")");
+  "/\\(:keywords?\\s+(.+?):\\)/ei",
+  "PZZ(\$GLOBALS['PCache'][\$pagename]['=keywords'][]=PSS('$1'))");
 Markup('description', '>&',
   "/\\(:description\\s+(.+?):\\)/ei",
-  "PZZ(\$GLOBALS['HTMLHeaderFmt'][] = \"<meta name='description' content='\".
-    str_replace('\\'','&#39;',PSS('$1')).\"' />\")"); 
+  "PZZ(\$GLOBALS['PCache'][\$pagename]['=description'][]=PSS('$1'))");
+$HTMLHeaderFmt['meta'] = 'function:PrintMetaTags';
+function PrintMetaTags($pagename, $args) {
+  global $PCache;
+  foreach(array('keywords', 'description') as $n) {
+    foreach((array)@$PCache[$pagename]["=$n"] as $v) {
+      $v = str_replace("'", '&#039;', $v);
+      print "<meta name='$n' content='$v' />\n";
+    }
+  }
+}
 
 #### inline markups ####
 ## ''emphasis''
@@ -204,9 +214,9 @@ Markup('[[|#', '<[[|',
 ## [[target |+]] title links
 Markup('[[|+', '<[[|',
   "/(?>\\[\\[([^|\\]]+))\\|\\s*\\+\\s*]]/e",
-  "Keep(MakeLink(\$pagename,PSS('$1'),
-                 FmtPageName('\$Title',MakePageName(\$pagename,PSS('$1')),1),
-                 '$2'),'L')");
+  "Keep(MakeLink(\$pagename, PSS('$1'),
+                 PageVar(MakePageName(\$pagename,PSS('$1')), '\$Title')
+                ),'L')");
 
 ## bare urllinks 
 Markup('urllink','>[[',
@@ -315,27 +325,27 @@ function Cells($name,$attr) {
   $attr = preg_replace('/([a-zA-Z]=)([^\'"]\\S*)/',"\$1'\$2'",$attr);
   $tattr = @$MarkupFrame[0]['tattr'];
   $name = strtolower($name);
-  $out = array('<:block>');
+  $out = '<:block>';
   if (strncmp($name, 'cell', 4) != 0 || @$MarkupFrame[0]['closeall']['div']) {
-    $out[] = @$MarkupFrame[0]['closeall']['div']; 
+    $out .= @$MarkupFrame[0]['closeall']['div']; 
     unset($MarkupFrame[0]['closeall']['div']);
-    $out[] = @$MarkupFrame[0]['closeall']['table']; 
+    $out .= @$MarkupFrame[0]['closeall']['table']; 
     unset($MarkupFrame[0]['closeall']['table']);
   }
   if ($name == 'div') {
     $MarkupFrame[0]['closeall']['div'] = "</div>";
-    $out[] = "<div $attr>";
+    $out .= "<div $attr>";
   }
   if ($name == 'table') $MarkupFrame[0]['tattr'] = $attr;
   if (strncmp($name, 'cell', 4) == 0) {
     if (strpos($attr, "valign=")===false) $attr .= " valign='top'";
     if (!@$MarkupFrame[0]['closeall']['table']) {
        $MarkupFrame[0]['closeall']['table'] = "</td></tr></table>";
-       $out[] = "<table $tattr><tr><td $attr>";
-    } else if ($name == 'cellnr') $out[] = "</td></tr><tr><td $attr>";
-    else $out[] = "</td><td $attr>";
+       $out .= "<table $tattr><tr><td $attr>";
+    } else if ($name == 'cellnr') $out .= "</td></tr><tr><td $attr>";
+    else $out .= "</td><td $attr>";
   }
-  return implode('', $out);
+  return $out;
 }
 
 Markup('table', '<block',
@@ -350,19 +360,19 @@ Markup('^>><<', '<^>>',
 
 #### special stuff ####
 ## (:markup:) for displaying markup examples
-function MarkupMarkup($pagename, $lead, $text) {
-  return "$lead(:divend:)" .
+function MarkupMarkup($pagename, $text) {
+  return "(:divend:)" .
     Keep("<table class='markup' align='center'><tr><td class='markup1'><pre>" .
       wordwrap($text, 70) .  "</pre></td></tr><tr><td class='markup2'>") .
     "\n$text\n(:divend:)</td></tr></table>\n";
 }
 
 Markup('markup', '<[=',
-  "/(^|\\(:nl:\\))\\(:markup:\\)[^\\S\n]*\\[([=@])(.*?)\\2\\]/seim",
-  "MarkupMarkup(\$pagename, '$1', PSS('$3'))");
+  "/\\(:markup:\\)[^\\S\n]*\\[([=@])(.*?)\\1\\]/sei",
+  "MarkupMarkup(\$pagename, PSS('$2'))");
 Markup('markupend', '>markup',
-  "/(^|\\(:nl:\\))\\(:markup:\\)[^\\S\n]*\n(.*?)\\(:markupend:\\)/seim",
-  "MarkupMarkup(\$pagename, '$1', PSS('$2'))");
+  "/\\(:markup:\\)[^\\S\n]*\n(.*?)\\(:markupend:\\)/sei",
+  "MarkupMarkup(\$pagename, PSS('$1'))");
 
 $HTMLStylesFmt['markup'] = "
   table.markup { border: 2px dotted #ccf; width:90%; }

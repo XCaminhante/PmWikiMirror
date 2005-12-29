@@ -18,11 +18,10 @@
 
 global $HTTPHeaders, $KeepToken, $pagename,
   $GroupPattern, $NamePattern, $WikiWordPattern, $SuffixPattern,
-  $PageNameChars, $MakePageNamePatterns, $CaseConversions;
+  $PageNameChars, $MakePageNamePatterns, $CaseConversions, $Charset;
 
-$HTTPHeaders[] = 'Content-type: text/html; charset=utf-8';
-
-$KeepToken = "\263\263\263";
+$Charset = 'UTF-8';
+$HTTPHeaders[] = 'Content-type: text/html; charset=UTF-8';
 $pagename = $_REQUEST['n'];
 if (!$pagename) $pagename = $_REQUEST['pagename'];
 if (!$pagename &&
@@ -41,7 +40,8 @@ SDV($PageNameChars, '-[:alnum:]\\x80-\\xfe');
 SDV($MakePageNamePatterns, array(
     "/'/" => '',                           # strip single-quotes
     "/[^$PageNameChars]+/" => ' ',         # convert everything else to space
-    "/(?<=^| )(.)/eu" => "utf8toupper('$1')", 
+    "/(?<=^| )([a-z])/e" => "strtoupper('$1')", 
+    "/(?<=^| )([\\xc0-\\xdf].)/e" => "utf8toupper('$1')", 
     "/ /" => ''));
 
 function utf8toupper($x) {
