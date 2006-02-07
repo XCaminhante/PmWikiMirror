@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2005 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2006 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -39,12 +39,16 @@ $SearchPatterns['normal'][] = str_replace('.', '\\.', "!^$pagename$!");
 ## $FPLFormatOpt is a list of options associated with fmt=
 ## values.  'default' is used for any undefined values of fmt=.
 SDVA($FPLFormatOpt, array(
-  'default' => array('fn' => 'FPLTemplate', 'fmt' => '#default'),
-  'bygroup' => array('fn' => 'FPLTemplate', 'template' => '#bygroup'),
-  'simple'  => array('fn' => 'FPLTemplate', 'template' => '#simple'),
-  'group'   => array('fn' => 'FPLTemplate', 'template' => '#group'),
+  'default' => array('fn' => 'FPLTemplate', 'fmt' => '#default', 
+                     'class' => 'fpltemplate'),
+  'bygroup' => array('fn' => 'FPLTemplate', 'template' => '#bygroup',
+                     'class' => 'fplbygroup'),
+  'simple'  => array('fn' => 'FPLTemplate', 'template' => '#simple',
+                     'class' => 'fplsimple'),
+  'group'   => array('fn' => 'FPLTemplate', 'template' => '#group',
+                     'class' => 'fplgroup'),
   'title'   => array('fn' => 'FPLTemplate', 'template' => '#title',
-                     'order' => 'title'),
+                     'class' => 'fpltitle', 'order' => 'title'),
   ));
 
 SDV($SearchResultsFmt, "<div class='wikisearch'>\$[SearchFor]
@@ -155,7 +159,8 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   $readf |= $order && ($order!='name') && ($order!='-name');
 
   $pats = @(array)$SearchPatterns[$opt['list']];
-  if (@$opt['group']) array_unshift($pats, "/^({$opt['group']})\./i");
+  if (@$opt['group']) $pats[] = FixGlob($opt['group'], '$1$2.*');
+  if (@$opt['name']) $pats[] = FixGlob($opt['name'], '$1*.$2');
 
   # inclp/exclp contain words to be included/excluded.  
   $inclp = array(); $exclp = array();
@@ -285,7 +290,7 @@ function FPLTemplate($pagename, &$matches, $opt) {
   $ttext = IncludeText($pagename, $tname, true);
   $ttext = preg_replace('/\\[\\[#[A-Za-z][-.:\\w]*\\]\\]/', '', $ttext);
 
-  if (!$opt['order'] && !$opt['trail']) $opt['order'] = 'name';
+  if (!@$opt['order'] && !@$opt['trail']) $opt['order'] = 'name';
   $matches = array_values(MakePageList($pagename, $opt, 0));
   if (@$opt['count']) array_splice($matches, $opt['count']);
 
@@ -311,7 +316,9 @@ function FPLTemplate($pagename, &$matches, $opt) {
     $out .= $item;
     $lgroup = $group;
   }
-  return '<div>'.MarkupToHTML($pagename, $out, false).'</div>';
+  $class = preg_replace('/[^-a-zA-Z0-9\\x80-\\xff]/', ' ', @$opt['class']);
+  $div = ($class) ? "<div class='$class'>" : '<div>';
+  return $div.MarkupToHTML($pagename, $out, false).'</div>';
 }
 
 

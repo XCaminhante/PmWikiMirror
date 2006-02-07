@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2005 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2006 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -54,7 +54,7 @@ Markup('include', '>if',
   '/\\(:include\\s+(\\S.*?):\\)/ei',
   "PRR(IncludeText(\$pagename, '$1'))");
 
-$SaveAttrPatterns['/\\(:(if|include\\s).*?:\\)/i'] = ' ';
+$SaveAttrPatterns['/\\(:(if|include)(\\s.*?)?:\\)/i'] = ' ';
 
 ## GroupHeader/GroupFooter handling
 Markup('nogroupheader', '>include',
@@ -183,7 +183,7 @@ Markup('[[<<]]','inline','/\\[\\[&lt;&lt;\\]\\]/',"<br clear='all' />");
 
 ###### Links ######
 ## [[free links]]
-Markup('[[','links',"/(?>\\[\\[\\s*)(\\S.*?)\\]\\]($SuffixPattern)/e",
+Markup('[[','links',"/(?>\\[\\[\\s*)(.*?)\\]\\]($SuffixPattern)/e",
   "Keep(MakeLink(\$pagename,PSS('$1'),NULL,'$2'),'L')");
 
 ## [[!Category]]
@@ -191,15 +191,21 @@ SDV($CategoryGroup,'Category');
 SDV($LinkCategoryFmt,"<a class='categorylink' href='\$LinkUrl'>\$LinkText</a>");
 Markup('[[!','<[[','/\\[\\[!(.*?)\\]\\]/e',
   "Keep(MakeLink(\$pagename,PSS('$CategoryGroup/$1'),NULL,'',\$GLOBALS['LinkCategoryFmt']),'L')");
+# This is a temporary workaround for blank category pages.
+# It may be removed in a future release (Pm, 2006-01-24)
+if (preg_match("/^$CategoryGroup\\./", $pagename)) {
+  SDV($DefaultPageTextFmt, '');
+  SDV($PageNotFoundHeaderFmt, 'HTTP/1.1 200 Ok');
+}
 
 ## [[target | text]]
 Markup('[[|','<[[',
-  "/(?>\\[\\[([^|\\]]+)\\|\\s*)(.*?)\\s*\\]\\]($SuffixPattern)/e",
+  "/(?>\\[\\[([^|\\]]*)\\|\\s*)(.*?)\\s*\\]\\]($SuffixPattern)/e",
   "Keep(MakeLink(\$pagename,PSS('$1'),PSS('$2'),'$3'),'L')");
 
 ## [[text -> target ]]
 Markup('[[->','>[[|',
-  "/(?>\\[\\[([^\\]]+?)\\s*-+&gt;\\s*)(\\S.+?)\\]\\]($SuffixPattern)/e",
+  "/(?>\\[\\[([^\\]]+?)\\s*-+&gt;\\s*)(.*?)\\]\\]($SuffixPattern)/e",
   "Keep(MakeLink(\$pagename,PSS('$2'),PSS('$1'),'$3'),'L')");
 
 ## [[#anchor]]
@@ -208,7 +214,7 @@ Markup('[[#','<[[','/(?>\\[\\[#([A-Za-z][-.:\\w]*))\\]\\]/e',
 
 ## [[target |#]] reference links
 Markup('[[|#', '<[[|',
-  "/(?>\\[\\[([^|\\]]+))\\|#\\]\\]/e",  
+  "/(?>\\[\\[([^|\\]]+))\\|\\s*#\\s*\\]\\]/e",  
   "Keep(MakeLink(\$pagename,PSS('$1'),'['.++\$MarkupFrame[0]['ref'].']'),'L')");
 
 ## [[target |+]] title links
@@ -406,4 +412,9 @@ function CondDate($condparm) {
   if ($Now >= $g1) return false;
   return true;
 }
-  
+
+
+# This pattern enables the (:encrypt <phrase>:) markup/replace-on-save
+# pattern.
+SDV($ROSPatterns['/\\(:encrypt\\s+([^\\s:=]+).*?:\\)/e'], "crypt(PSS('$1'))");
+

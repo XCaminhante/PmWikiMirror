@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2002-2005 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2002-2006 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -18,8 +18,7 @@
     in config.php.
 */
 
-SDV($DefaultPage,"$DefaultGroup.$DefaultName");
-if ($pagename=='') $pagename=$DefaultPage;
+$pagename = ResolvePageName($pagename);
 
 if (!IsEnabled($EnableStdConfig,1)) return;
 
@@ -34,13 +33,16 @@ if (IsEnabled($EnableRobotControl,1))
 ## last modified.  If the browser has provided us with a matching 
 ## If-Modified-Since request header, we can return 304 Not Modified.
 SDV($LastModFile,"$WorkDir/.lastmod");
-if (@$EnableIMSCaching && in_array($action,(array)$CacheActions)) {
+if (@$EnableIMSCaching && in_array($action, (array)$CacheActions)) {
   $v = @filemtime($LastModFile);
+  foreach(get_included_files() as $f) {
+    $q = @filemtime($f); if ($q > $v) $v = $q;
+  }
   if ($v) {
-    $HTTPLastMod=gmdate('D, d M Y H:i:s \G\M\T',$v);
+    $HTTPLastMod = gmdate('D, d M Y H:i:s \G\M\T',$v);
     $HTTPHeaders[] = "Cache-Control: no-cache";
     $HTTPHeaders[] = "Last-Modified: $HTTPLastMod";
-    if (@$_SERVER['HTTP_IF_MODIFIED_SINCE']==$HTTPLastMod) 
+    if (@$_SERVER['HTTP_IF_MODIFIED_SINCE']==$HTTPLastMod)
       { header("HTTP/1.0 304 Not Modified"); exit(); }
   }
 }
@@ -48,10 +50,12 @@ if (@$EnableIMSCaching && in_array($action,(array)$CacheActions)) {
 ## Scripts that are part of a standard PmWiki distribution.
 if (IsEnabled($EnableAuthorTracking,1)) 
   include_once("$FarmD/scripts/author.php");
-if (IsEnabled($EnableSimulEdit,1))
-  include_once("$FarmD/scripts/simuledit.php");
 if (IsEnabled($EnablePrefs, 1))
   include_once("$FarmD/scripts/prefs.php");
+if (IsEnabled($EnableSimulEdit, 1))
+  include_once("$FarmD/scripts/simuledit.php");
+if (IsEnabled($EnableDrafts, 0))
+  include_once("$FarmD/scripts/draft.php");        # after simuledit + prefs
 if (IsEnabled($EnableSkinLayout,1))
   include_once("$FarmD/scripts/skins.php");        # must come after prefs
 if (IsEnabled($EnableTransitions,1))
