@@ -78,6 +78,9 @@ Markup('nl1','>nl0',"/\\(:nl:\\)/i",'');
 Markup('\\$','>nl1',"/\\\\(?>(\\\\*))\n/e",
   "str_repeat('<br />',strlen('$1'))");
 
+## Remove one <:vspace> after !headings
+Markup('!vspace', '>\\$', "/^(!(?>[^\n]+)\n)<:vspace>/m", '$1');
+
 ## (:noheader:),(:nofooter:),(:notitle:)...
 Markup('noheader', 'directives',
   '/\\(:noheader:\\)/ei',
@@ -367,10 +370,11 @@ Markup('^>><<', '<^>>',
 #### special stuff ####
 ## (:markup:) for displaying markup examples
 function MarkupMarkup($pagename, $text) {
-  return "(:divend:)" .
+  $html = MarkupToHTML($pagename, $text, false);
+  return 
     Keep("<table class='markup' align='center'><tr><td class='markup1'><pre>" .
-      wordwrap($text, 70) .  "</pre></td></tr><tr><td class='markup2'>") .
-    "\n$text\n(:divend:)</td></tr></table>\n";
+      wordwrap($text, 70) .  "</pre></td></tr><tr><td class='markup2'>
+      $html</td></tr></table>");
 }
 
 Markup('markup', '<[=',

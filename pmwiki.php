@@ -27,6 +27,8 @@
 */
 error_reporting(E_ALL ^ E_NOTICE);
 StopWatch('PmWiki');
+@ini_set('magic_quotes_runtime', 0);
+@ini_set('magic_quotes_sybase', 0);
 if (ini_get('register_globals')) 
   foreach($_REQUEST as $k=>$v) { 
     if (preg_match('/^(GLOBALS|_SERVER|_GET|_POST|_COOKIE|_FILES|_ENV|_REQUEST|_SESSION)$/i', $k)) exit();
@@ -91,8 +93,8 @@ $CookiePrefix = '';
 $SiteGroup = 'Site';
 $DefaultGroup = 'Main';
 $DefaultName = 'HomePage';
-$GroupHeaderFmt = '(:include {$Group}.GroupHeader:)(:nl:)';
-$GroupFooterFmt = '(:nl:)(:include {$Group}.GroupFooter:)';
+$GroupHeaderFmt = '(:include {$Group}.GroupHeader self=0:)(:nl:)';
+$GroupFooterFmt = '(:nl:)(:include {$Group}.GroupFooter self=0:)';
 $PagePathFmt = array('{$Group}.$1','$1.$1','$1.{$DefaultName}');
 $PageAttributes = array(
   'passwdread' => '$[Set new read password:]',
@@ -122,6 +124,7 @@ $FmtPV = array(
   '$LastModifiedHost' => '@$page["host"]',
   '$LastModified' => 'strftime($GLOBALS["TimeFmt"], $page["time"])',
   '$LastModifiedSummary' => '@$page["csum"]',
+  '$Description' => '@$page["description"]',
   '$SiteGroup'    => '$GLOBALS["SiteGroup"]',
   '$VersionNum'   => '$GLOBALS["VersionNum"]',
   '$Version'      => '$GLOBALS["Version"]',
@@ -193,6 +196,27 @@ $Conditions['authid'] = '@$GLOBALS["AuthId"] > ""';
 $Conditions['equal'] = 'CompareArgs($condparm) == 0';
 function CompareArgs($arg) 
   { $arg = ParseArgs($arg); return strcmp(@$arg[''][0], @$arg[''][1]); }
+
+## CondExpr handles complex conditions (expressions)
+## Portions Copyright 2005 by D. Faure (dfaure@cpan.org)
+function CondExpr($pagename, $condname, $condparm) {
+  global $CondExprOps;
+  SDV($CondExprOps, 'and|x?or|&&|\\|\\||[!()]');
+  if ($condname == '(' || $condname == '[')
+    $condparm = preg_replace('/[\\]\\)]\\s*$/', '', $condparm);
+  $condparm = str_replace('&amp;&amp;', '&&', $condparm);
+  $terms = preg_split("/(?<!\\S)($CondExprOps)(?!\\S)/i", $condparm, -1,
+                      PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
+  foreach($terms as $i => $t) {
+    $t = trim($t);
+    if (preg_match("/^($CondExprOps)$/i", $t)) continue;
+    if ($t) $terms[$i] = CondText($pagename, "if $t", 'TRUE') ? '1' : '0';
+  }
+  return @eval('return(' . implode(' ', $terms) . ');');
+}
+$Conditions['expr'] = 'CondExpr($pagename, $condname, $condparm)';
+$Conditions['('] = 'CondExpr($pagename, $condname, $condparm)';
+$Conditions['['] = 'CondExpr($pagename, $condname, $condparm)';
 
 $MarkupTable['_begin']['seq'] = 'B';
 $MarkupTable['_end']['seq'] = 'E';
@@ -453,6 +477,7 @@ function ResolvePageName($pagename) {
   global $DefaultPage, $DefaultGroup, $DefaultName,
     $GroupPattern, $NamePattern, $EnableFixedUrlRedirect;
   SDV($DefaultPage, "$DefaultGroup.$DefaultName");
+  $pagename = preg_replace('!([./][^./]+)\\.html$!', '$1', $pagename);
   if ($pagename == '') return $DefaultPage;
   $p = MakePageName($DefaultPage, $pagename);
   if (preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $pagename))
@@ -700,6 +725,7 @@ class PageStore {
   }
   function ls($pats=NULL) {
     global $GroupPattern, $NamePattern;
+    StopWatch("PageStore::ls begin {$this->dir}");
     $pats=(array)$pats; 
     array_push($pats, "/^$GroupPattern\.$NamePattern$/");
     $dir = $this->pagefile('$Group.$Name');
@@ -713,13 +739,13 @@ class PageStore {
         if ($pagefile{0} == '.') continue;
         if (is_dir("$dir/$pagefile"))
           { array_push($dirlist,"$dir/$pagefile"); continue; }
-        
-        if (@$seen[$pagefile]++) continue;
         $o[] = $pagefile;
       }
       closedir($dfp);
+      StopWatch("PageStore::ls merge {$this->dir}");
       $out = array_merge($out, MatchPageNames($o, $pats));
     }
+    StopWatch("PageStore::ls end {$this->dir}");
     return $out;
   }
 }
@@ -868,7 +894,7 @@ function IncludeText($pagename, $inclspec) {
   SDV($MaxIncludes,50);
   $npat = '[[:alpha:]][-\\w]*';
   if ($InclCount++>=$MaxIncludes) return Keep($inclspec);
-  $args = ParseArgs($inclspec);
+  $args = array_merge(array('self' => 1), ParseArgs($inclspec));
   while (count($args['#'])>0) {
     $k = array_shift($args['#']); $v = array_shift($args['#']);
     if ($k=='') {
@@ -876,6 +902,7 @@ function IncludeText($pagename, $inclspec) {
       if ($match[1]) {                                 # include a page
         if (isset($itext)) continue;
         $iname = MakePageName($pagename, $match[1]);
+        if (!$args['self'] && $iname == $pagename) continue;
         if (!PageExists($iname)) continue;
         $ipage = RetrieveAuthPage($iname, 'read', false, READPAGE_CURRENT);
         $itext = @$ipage['text'];
@@ -884,16 +911,18 @@ function IncludeText($pagename, $inclspec) {
         @list($x, $aa, $dots, $b, $bb) = $m;
         if (!$dots && !$b) $bb = $npat;
         if ($aa)
-          $itext=preg_replace("/^.*?([^\n]*\\[\\[#$aa\\]\\])/s",'$1',$itext,1);
+          $itext=preg_replace("/^.*?\n([^\n]*\\[\\[#$aa\\]\\])/s",
+                              '$1', $itext, 1);
         if ($bb)
-          $itext=preg_replace("/(.)[^\n]*\\[\\[#$bb\\]\\].*$/s",'$1',$itext,1);
+          $itext=preg_replace("/(\n)[^\n]*\\[\\[#$bb\\]\\].*$/s",
+                              '$1', $itext, 1);
       }
       continue;
     }
     if (in_array($k, array('line', 'lines', 'para', 'paras'))) {
       preg_match('/^(\\d*)(\\.\\.(\\d*))?$/', $v, $match);
       @list($x, $a, $dots, $b) = $match;
-      $upat = ($k{0} == 'p') ? ".*?(\n\\s*\n|$)" : "[^\n]*\n";
+      $upat = ($k{0} == 'p') ? ".*?(\n\\s*\n|$)" : "[^\n]*(?:\n|$)";
       if (!$dots) { $b=$a; $a=0; }
       if ($a>0) $a--;
       $itext=preg_replace("/^(($upat){0,$b}).*$/s",'$1',$itext,1);
@@ -1019,11 +1048,12 @@ function LinkPage($pagename,$imap,$path,$title,$txt,$fmt=NULL) {
   $qf = @$match[2];
   @$LinkTargets[$tgtname]++;
   if (!$fmt) {
-    if (PageExists($tgtname)) 
-      $fmt = ($tgtname==$pagename && $qf=='') ?  $LinkPageSelfFmt 
-        : $LinkPageExistsFmt;
-    elseif (preg_match('/\\s/',$txt)) $fmt=$LinkPageCreateSpaceFmt;
-    else $fmt=$LinkPageCreateFmt;
+    if (!PageExists($tgtname) && !preg_match('/[&?]action=/', $qf))
+      $fmt = preg_match('/\\s/', $txt) 
+             ? $LinkPageCreateSpaceFmt : $LinkPageCreateFmt;
+    else
+      $fmt = ($tgtname == $pagename && $qf == '') 
+             ? $LinkPageSelfFmt : $LinkPageExistsFmt;
   }
   $fmt = str_replace(array('$LinkUrl', '$LinkText'),
            array(PageVar($tgtname, '$PageUrl').PUE($qf), $txt), $fmt);
@@ -1293,9 +1323,11 @@ function PreviewPage($pagename,&$page,&$new) {
   
 function HandleEdit($pagename, $auth = 'edit') {
   global $IsPagePosted, $EditFields, $ChangeSummary, $EditFunctions, 
-    $EnablePost, $FmtV, $Now, 
+    $EnablePost, $FmtV, $Now, $EditRedirectFmt, 
     $PageEditForm, $HandleEditFmt, $PageStartFmt, $PageEditFmt, $PageEndFmt;
-  if (@$_POST['cancel']) { Redirect($pagename); return; }
+  SDV($EditRedirectFmt, '$FullName');
+  if (@$_POST['cancel']) 
+    { Redirect(FmtPageName($EditRedirectFmt, $pagename)); return; }
   Lock(2);
   $IsPagePosted = false;
   $page = RetrieveAuthPage($pagename, $auth, true);
@@ -1309,7 +1341,8 @@ function HandleEdit($pagename, $auth = 'edit') {
   $EnablePost &= preg_grep('/^post/', array_keys(@$_POST));
   foreach((array)$EditFunctions as $fn) $fn($pagename,$page,$new);
   Lock(0);
-  if ($IsPagePosted && !@$_POST['postedit']) { Redirect($pagename); return; }
+  if ($IsPagePosted && !@$_POST['postedit']) 
+    { Redirect(FmtPageName($EditRedirectFmt, $pagename)); return; }
   $FmtV['$DiffClassMinor'] = 
     (@$_POST['diffclass']=='minor') ?  "checked='checked'" : '';
   $FmtV['$EditText'] = 
@@ -1320,7 +1353,7 @@ function HandleEdit($pagename, $auth = 'edit') {
     $FmtV['$EditForm'] = MarkupToHTML($pagename, $form['text']);
   }
   SDV($PageEditFmt, "<div id='wikiedit'>
-    <h1 class='wikiaction'>$[Editing {\$FullName}]</h1>
+    <h2 class='wikiaction'>$[Editing {\$FullName}]</h1>
     <form method='post' rel='nofollow' action='\$PageUrl?action=edit'>
     <input type='hidden' name='action' value='edit' />
     <input type='hidden' name='n' value='\$FullName' />
@@ -1457,8 +1490,10 @@ function NormalizeAuth($auth, $source) {
 ## as needed.
 function SessionAuth($pagename, $auth = NULL) {
   global $AuthId, $AuthList, $AuthPw;
+  static $called;
 
-  if (!$auth && !$_REQUEST[session_name()]) return;
+  @$called++;
+  if (!$auth && ($called > 1 || !@$_REQUEST[session_name()])) return;
 
   $sid = session_id();
   @session_start();
@@ -1480,7 +1515,7 @@ function PrintAttrForm($pagename) {
     <table>",$pagename);
   $page = $PCache[$pagename];
   foreach($PageAttributes as $attr=>$p) {
-    $prompt = FmtPageName($p, $pagename);
+    if (!$p) continue;
     $setting = @$page[$attr];
     $value = @$page[$attr];
     if (strncmp($attr, 'passwd', 6) == 0) {
@@ -1514,7 +1549,7 @@ function HandleAttr($pagename, $auth = 'attr') {
     will leave the attribute unchanged.  To clear an attribute, enter
     'clear'."));
   SDV($PageAttrFmt,"<div class='wikiattr'>
-    <h1 class='wikiaction'>$[\$FullName Attributes]</h1>
+    <h2 class='wikiaction'>$[\$FullName Attributes]</h1>
     <p>$[EnterAttributes]</p></div>");
   SDV($HandleAttrFmt,array(&$PageStartFmt,&$PageAttrFmt,
     'function:PrintAttrForm',&$PageEndFmt));
