@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2005 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2005-2006 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -168,8 +168,8 @@ function HandleFeed($pagename, $auth = 'read') {
   SDV($RSSTimeFmt, 'D, d M Y H:i:s \G\M\T');
   SDV($FeedDescPatterns, 
     array('/<[^>]*$/' => ' ', '/\\w+$/' => '', '/<[^>]+>/' => ''));
-  SDVA($FeedCategoryOpt, array('link' => $pagename, 'readf' => 1));
-  SDVA($FeedTrailOpt, array('trail' => $pagename, 'count' => 10, 'readf' => 1));
+  SDVA($FeedCategoryOpt, array('link' => $pagename));
+  SDVA($FeedTrailOpt, array('trail' => $pagename, 'count' => 10));
 
   $f = $FeedFmt[$action];
   $page = RetrieveAuthPage($pagename, $auth, true, READPAGE_CURRENT);
@@ -177,9 +177,8 @@ function HandleFeed($pagename, $auth = 'read') {
   $feedtime = $page['time'];
 
   # determine list of pages to display
-  if (@($_REQUEST['trail'] || $_REQUEST['group'] || $_REQUEST['link'])) 
-    $opt['readf'] = 1;
-  else if ($action == 'dc') $opt = array();
+  if (@($_REQUEST['trail'] || $_REQUEST['group'] || $_REQUEST['link'] 
+        || $_REQUEST['name']) || $action == 'dc') $opt = array();
   else if (preg_match("/^$CategoryGroup\\./", $pagename)) 
     $opt = $FeedCategoryOpt;
   else $opt = $FeedTrailOpt;
@@ -195,6 +194,8 @@ function HandleFeed($pagename, $auth = 'read') {
   $pl = array();
   foreach($pagelist as $pn) {
     if (!PageExists($pn)) continue;
+    if (!isset($PCache[$pn]['time']))
+      PCache($pn, ReadPage($pn, READPAGE_CURRENT));
     $page = & $PCache[$pn];
     $pl[] = $pn;
     if (@$opt['count'] && count($pl) >= $opt['count']) break;
@@ -222,10 +223,7 @@ function HandleFeed($pagename, $auth = 'read') {
     $out .= FmtPageName($f['feed']['_items'], $pagename);
   foreach($pagelist as $pn) {
     $page = &$PCache[$pn];
-    $FmtV['$ItemDesc'] = (@$page['description']) 
-      ? $page['description']
-      : trim(preg_replace(array_keys($FeedDescPatterns), 
-                     array_values($FeedDescPatterns), @$page['excerpt']));
+    $FmtV['$ItemDesc'] = @$page['description'];
     $FmtV['$ItemISOTime'] = gmstrftime($ISOTimeFmt, $page['time']);
     $FmtV['$ItemRSSTime'] = gmdate($RSSTimeFmt, $page['time']);
 

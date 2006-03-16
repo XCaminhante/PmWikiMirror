@@ -20,9 +20,10 @@
 function PreserveText($sigil, $text, $lead) {
   if ($sigil=='=') return $lead.Keep($text);
   if (strpos($text, "\n")===false) 
-    return "$lead<code>".Keep($text)."</code>";
+    return "$lead<code class='escaped'>".Keep($text)."</code>";
   $text = preg_replace("/\n[^\\S\n]+$/", "\n", $text);
-  if ($lead == "") return "<pre>".Keep($text)."</pre>";
+  if ($lead == "" || $lead == "\n") 
+    return "$lead<pre class='escaped'>".Keep($text)."</pre>";
   return "$lead<:pre,1>".Keep($text);
 }
 
@@ -38,7 +39,7 @@ Markup('\\r','<[=','/\\r/','');
 
 # $[phrase] substitutions
 Markup('$[phrase]', '>[=',
-  '/\\$\\[(?>([^\\]]+))\\]/e', "XL(PSS('$1'))");
+  '/\\$\\[(?>([^\\]]+))\\]/e', "NoCache(XL(PSS('$1')))");
 
 # {$var} substitutions
 Markup('{$var}', '>$[phrase]',
@@ -54,7 +55,12 @@ Markup('include', '>if',
   '/\\(:include\\s+(\\S.*?):\\)/ei',
   "PRR(IncludeText(\$pagename, '$1'))");
 
-$SaveAttrPatterns['/\\(:(if|include)(\\s.*?)?:\\)/i'] = ' ';
+## (:redirect:)
+Markup('redirect', '<include',
+  '/\\(:redirect\\s+(\\S.*?):\\)/ei',
+  "RedirectMarkup(\$pagename, PSS('$1'))");
+
+$SaveAttrPatterns['/\\(:(if|include|redirect)(\\s.*?)?:\\)/i'] = ' ';
 
 ## GroupHeader/GroupFooter handling
 Markup('nogroupheader', '>include',
@@ -129,22 +135,21 @@ Markup('&','directives','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
 ## (:title:)
 Markup('title','>&',
   '/\\(:title\\s(.*?):\\)/ei',
-  "PZZ(\$GLOBALS['PCache'][\$pagename]['title']
-       = \$GLOBALS['PCache'][\$pagename]['=title']
-       = PSS('$1'))");
+  "PZZ(PCache(\$pagename, 
+         array('title' => SetProperty(\$pagename, 'title', PSS('$1')))))");
 
 ## (:keywords:), (:description:)
 Markup('keywords', '>&', 
   "/\\(:keywords?\\s+(.+?):\\)/ei",
-  "PZZ(\$GLOBALS['PCache'][\$pagename]['=keywords'][]=PSS('$1'))");
+  "PZZ(SetProperty(\$pagename, 'keywords', PSS('$1'), ', '))");
 Markup('description', '>&',
   "/\\(:description\\s+(.+?):\\)/ei",
-  "PZZ(\$GLOBALS['PCache'][\$pagename]['=description'][]=PSS('$1'))");
+  "PZZ(SetProperty(\$pagename, 'description', PSS('$1'), '\n'))");
 $HTMLHeaderFmt['meta'] = 'function:PrintMetaTags';
 function PrintMetaTags($pagename, $args) {
   global $PCache;
   foreach(array('keywords', 'description') as $n) {
-    foreach((array)@$PCache[$pagename]["=$n"] as $v) {
+    foreach((array)@$PCache[$pagename]["=p_$n"] as $v) {
       $v = str_replace("'", '&#039;', $v);
       print "<meta name='$n' content='$v' />\n";
     }
@@ -213,7 +218,8 @@ Markup('[[->','>[[|',
 
 ## [[#anchor]]
 Markup('[[#','<[[','/(?>\\[\\[#([A-Za-z][-.:\\w]*))\\]\\]/e',
-  "Keep(\"<a name='$1' id='$1'></a>\",'L')");
+  "Keep(TrackAnchors('$1') ? '' : \"<a name='$1' id='$1'></a>\", 'L')");
+function TrackAnchors($x) { global $SeenAnchor; return @$SeenAnchor[$x]++; }
 
 ## [[target |#]] reference links
 Markup('[[|#', '<[[|',
@@ -263,7 +269,7 @@ Markup('^<:','>block','/^(?=\\s*\\S)(<:([^>]+)>)?/e',"Block('$2')");
 
 ## unblocked lines w/block markup become anonymous <:block>
 Markup('^!<:', '<^<:',
-  '/^(?!<:)(?=.*<\\/?(form|div|table|p|ul|ol|dl|h[1-6]|blockquote|pre|hr|textarea)\\b)/',
+  "/^(?!<:)(?=.*(<\\/?($BlockPattern)\\b)|$KeepToken\\d+B$KeepToken)/",
   '<:block>');
 
 ## Lines that begin with displayed images receive their own block.  A
@@ -369,28 +375,38 @@ Markup('^>><<', '<^>>',
 
 #### special stuff ####
 ## (:markup:) for displaying markup examples
-function MarkupMarkup($pagename, $text) {
-  $html = MarkupToHTML($pagename, $text, false);
-  return 
-    Keep("<table class='markup' align='center'><tr><td class='markup1'><pre>" .
-      wordwrap($text, 70) .  "</pre></td></tr><tr><td class='markup2'>
-      $html</td></tr></table>");
+function MarkupMarkup($pagename, $text, $opt = '') {
+  $MarkupMarkupOpt = array('class' => 'vert');
+  $opt = array_merge($MarkupMarkupOpt, ParseArgs($opt));
+  $html = MarkupToHTML($pagename, $text, array('escape' => 0));
+  if (@$opt['caption']) 
+    $caption = str_replace("'", '&#039;', 
+                           "<caption>{$opt['caption']}</caption>");
+  $class = preg_replace('/[^-\\s\\w]+/', ' ', @$opt['class']);
+  if (strpos($class, 'horiz') !== false) 
+    { $sep = ''; $pretext = wordwrap($text, 40); } 
+  else 
+    { $sep = '</tr><tr>'; $pretext = wordwrap($text, 75); }
+  return Keep("<table class='markup $class' align='center'>$caption
+      <tr><td class='markup1' valign='top'><pre>$pretext</pre></td>$sep<td 
+        class='markup2' valign='top'>$html</td></tr></table>");
 }
 
 Markup('markup', '<[=',
-  "/\\(:markup:\\)[^\\S\n]*\\[([=@])(.*?)\\1\\]/sei",
-  "MarkupMarkup(\$pagename, PSS('$2'))");
+  "/\\(:markup(\\s+([^\n]*?))?:\\)[^\\S\n]*\\[([=@])(.*?)\\3\\]/sei",
+  "MarkupMarkup(\$pagename, PSS('$4'), PSS('$2'))");
 Markup('markupend', '>markup',
-  "/\\(:markup:\\)[^\\S\n]*\n(.*?)\\(:markupend:\\)/sei",
-  "MarkupMarkup(\$pagename, PSS('$1'))");
+  "/\\(:markup(\\s+([^\n]*?))?:\\)[^\\S\n]*\n(.*?)\\(:markupend:\\)/sei",
+  "MarkupMarkup(\$pagename, PSS('$3'), PSS('$1'))");
 
 $HTMLStylesFmt['markup'] = "
-  table.markup { border: 2px dotted #ccf; width:90%; }
+  table.markup { border:2px dotted #ccf; width:90%; }
   td.markup1, td.markup2 { padding-left:10px; padding-right:10px; }
-  td.markup1 { border-bottom: 1px solid #ccf; }
-  div.faq { margin-left:2em; }
-  div.faq p.question { margin: 1em 0 0.75em -2em; font-weight:bold; }
-  div.faq hr { margin-left: -2em; }
+  table.vert td.markup1 { border-bottom:1px solid #ccf; }
+  table.horiz td.markup1 { width:23em; border-right:1px solid #ccf; }
+  table.markup caption { text-align:left; }
+  div.faq p, div.faq pre { margin-left:2em; }
+  div.faq p.question { margin:1em 0 0.75em 0; font-weight:bold; }
   ";
 
 #### Special conditions ####
@@ -399,6 +415,7 @@ $Conditions['date'] = "CondDate(\$condparm)";
 
 function CondDate($condparm) {
   global $Now;
+  NoCache();
   if (!preg_match('/^(.*?)(\\.\\.(.*))?$/', $condparm, $match)) return false;
   if ($match[2]) {
     $t0 = $match[1];  if ($t0 == '') $t0 = '19700101';
