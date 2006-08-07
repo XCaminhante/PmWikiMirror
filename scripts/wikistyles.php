@@ -6,8 +6,16 @@
     (at your option) any later version.  See pmwiki.php for full details.
 */
 
+SDV($WikiStylePattern,'%%|%[A-Za-z][-,=:#\\w\\s\'"().]*%');
+
 ## %% markup
 Markup('%%','style','%','return ApplyStyles($x);');
+
+## %define=...% markup on a line by itself
+Markup('%define=', '>split',
+  "/^(?=%define=)((?:$WikiStylePattern)\\s*)+$/e",
+  "PZZ(ApplyStyles(PSS('$0')))");
+
 ## restore links before applying styles
 Markup('restorelinks','<%%',"/$KeepToken(\\d+L)$KeepToken/e",
   '$GLOBALS[\'KPV\'][\'$1\']');
@@ -25,6 +33,7 @@ if (IsEnabled($EnableStdWikiStyles,1)) {
   ## display, margin, padding, and border css properties
   $WikiStyleCSS[] = 
     'float|display|(margin|padding|border)(-(left|right|top|bottom))?';
+  $WikiStyleCSS[] = 'white-space';
   ## list-styles
   $WikiStyleCSS[] = 'list-style';
   $WikiStyleCSS[] = 'width|height';
@@ -61,8 +70,6 @@ if (IsEnabled($EnableStdWikiStyles,1)) {
     'width' => '200px', 'apply' => 'block', 'text-align' => 'center'));
   SDV($WikiStyle['sidehead'], array('apply' => 'block', 'class' => 'sidehead'));
 }
-
-SDV($WikiStylePattern,'%%|%[A-Za-z][-,=:#\\w\\s\'"().]*%');
 
 SDVA($WikiStyleAttr,array(
   'vspace' => 'img',
@@ -131,7 +138,7 @@ function ApplyStyles($x) {
       foreach((array)$s as $k=>$v) {
         $v = trim($v);
         if ($k == 'class' && $v) $spanattr = "class='$v'";
-        elseif ($k=='id') $id = preg_replace('/\W/', '_', $v);
+        elseif ($k=='id') $id = preg_replace('/[^-A-Za-z0-9:_.]+/', '_', $v);
         elseif (($k=='width' || $k=='height') && !@$WikiStyleApply[$a]
             && preg_match('/\\s*<img\\b/', $p)) 
           $p = preg_replace("/<img(?![^>]*\\s$k=)/", "<img $k='$v'", $p);

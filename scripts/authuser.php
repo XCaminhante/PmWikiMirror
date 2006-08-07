@@ -31,8 +31,10 @@
 # let Site.AuthForm know that we're doing user-based authorization
 $EnableAuthUser = 1;
 
+$pagename = ResolvePageName($pagename);
 if (@$_POST['authid']) 
-  AuthUserId($pagename, @$_POST['authid'], @$_POST['authpw']);
+  AuthUserId($pagename, stripmagic(@$_POST['authid']), 
+             stripmagic(@$_POST['authpw']));
 else SessionAuth($pagename);
 
 function AuthUserId($pagename, $id, $pw=NULL) {
@@ -102,6 +104,7 @@ function AuthUserHtPasswd($pagename, $id, $pw, $pwlist) {
 
 function AuthUserLDAP($pagename, $id, $pw, $pwlist) {
   global $AuthLDAPBindDN, $AuthLDAPBindPassword;
+  if (!$pw) return false;
   if (!function_exists('ldap_connect')) return false;
   foreach ((array)$pwlist as $ldap) {
     if (!preg_match('!ldap://([^:]+)(?::(\\d+))?/(.+)$!', $ldap, $match))
@@ -121,7 +124,7 @@ function AuthUserLDAP($pagename, $id, $pw, $pwlist) {
       $x = ldap_get_entries($ds, $sr);
       if ($x['count'] == 1) {
         $dn = $x[0]['dn'];
-        if (ldap_bind($ds, $dn, $pw)) { ldap_close($ds); return true; }
+        if (@ldap_bind($ds, $dn, $pw)) { ldap_close($ds); return true; }
       }
     }
     ldap_close($ds);

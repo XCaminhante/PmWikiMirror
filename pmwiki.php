@@ -70,11 +70,11 @@ $RecentChangesFmt = array(
     '* [[{$Group}/{$Name}]]  . . . $CurrentTime $[by] $AuthorLink: [=$ChangeSummary=]');
 $ScriptUrl = 'http://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'];
 $PubDirUrl = preg_replace('#/[^/]*$#','/pub',$ScriptUrl,1);
-$HTMLVSpace = "<p class='vspace'></p>";
+$HTMLVSpace = "<vspace>";
 $HTMLPNewline = '';
 $MarkupFrame = array();
 $MarkupFrameBase = array('cs' => array(), 'vs' => '', 'ref' => 0,
-  'closeall' => array('block' => '<:block>'), 'is' => array(),
+  'closeall' => array(), 'is' => array(),
   'escape' => 1);
 $WikiWordCountMax = 1000000;
 $WikiWordCount['PmWiki'] = 1;
@@ -133,6 +133,7 @@ $FmtPV = array(
   '$AuthId'       => 'NoCache($GLOBALS["AuthId"])',
   '$DefaultGroup' => '$GLOBALS["DefaultGroup"]',
   '$DefaultName'  => '$GLOBALS["DefaultName"]',
+  '$Action'       => '$GLOBALS["action"]',
   );
 $SaveProperties = array('title', 'description', 'keywords');
 
@@ -194,13 +195,19 @@ $Conditions['group'] =
 $Conditions['name'] = 
   "(boolean)MatchPageNames(\$pagename, FixGlob(\$condparm, '$1*.$2'))";
 $Conditions['match'] = 'preg_match("!$condparm!",$pagename)';
-$Conditions['auth'] =
-  'NoCache(@$GLOBALS["PCache"][$GLOBALS["pagename"]]["=auth"][trim($condparm)])';
 $Conditions['authid'] = 'NoCache(@$GLOBALS["AuthId"] > "")';
 $Conditions['exists'] = 'PageExists(MakePageName(\$pagename, \$condparm))';
 $Conditions['equal'] = 'CompareArgs($condparm) == 0';
 function CompareArgs($arg) 
   { $arg = ParseArgs($arg); return strcmp(@$arg[''][0], @$arg[''][1]); }
+
+$Conditions['auth'] = 'CondAuth($pagename, $condparm)';
+function CondAuth($pagename, $condparm) {
+  NoCache();
+  list($level, $pn) = explode(' ', $condparm, 2);
+  $pn = ($pn > '') ? MakePageName($pagename, $pn) : $pagename;
+  return (boolean)RetrieveAuthPage($pn, $level, false, READPAGE_CURRENT);
+}
 
 ## CondExpr handles complex conditions (expressions)
 ## Portions Copyright 2005 by D. Faure (dfaure@cpan.org)
@@ -235,7 +242,7 @@ Markup('block','>links');
 Markup('style','>block');
 Markup('closeall', '_begin',
   '/^\\(:closeall:\\)$/e', 
-  "implode('', (array)\$GLOBALS['MarkupFrame'][0]['closeall'])");
+  "'<:block>' . MarkupClose()");
 
 $ImgExtPattern="\\.(?:gif|jpg|jpeg|png|GIF|JPG|JPEG|PNG)";
 $ImgTagFmt="<img src='\$LinkUrl' alt='\$LinkAlt' title='\$LinkAlt' />";
@@ -297,12 +304,12 @@ if (IsEnabled($EnableStdConfig,1))
 foreach((array)$InterMapFiles as $f) {
   $f = FmtPageName($f, $pagename);
   if (($v = @file($f))) 
-    $v = preg_replace('/^\\s*(?>\\w+)(?!:)/m', '$0:', implode('', $v));
+    $v = preg_replace('/^\\s*(?>\\w[-\\w]*)(?!:)/m', '$0:', implode('', $v));
   else if (PageExists($f)) {
     $p = ReadPage($f, READPAGE_CURRENT);
     $v = $p['text'];
   } else continue;
-  if (!preg_match_all("/^\\s*(\\w+:)[^\\S\n]+(\\S*)/m", $v, 
+  if (!preg_match_all("/^\\s*(\\w[-\\w]*:)[^\\S\n]+(\\S*)/m", $v, 
                       $match, PREG_SET_ORDER)) continue;
   foreach($match as $m) {
     if (strpos($m[2], '$1') === false) $m[2] .= '$1';
@@ -314,7 +321,7 @@ foreach((array)$InterMapFiles as $f) {
 $LinkPattern = implode('|',array_keys($LinkFunctions));
 SDV($LinkPageCreateSpaceFmt,$LinkPageCreateFmt);
 
-$Action = FmtPageName(@$ActionTitleFmt[$action],$pagename);
+$ActionTitle = FmtPageName(@$ActionTitleFmt[$action],$pagename);
 if (!function_exists(@$HandleActions[$action])) $action='browse';
 SDV($HandleAuth[$action], 'read');
 $HandleActions[$action]($pagename, $HandleAuth[$action]);
@@ -332,7 +339,7 @@ function PZZ($x,$y='') { return ''; }
 function PRR($x=NULL) 
   { if ($x || is_null($x)) $GLOBALS['RedoMarkupLine']++; return $x; }
 function PUE($x)
-  { return preg_replace('/[\\x80-\\xff ]/e', "'%'.dechex(ord('$0'))", $x); }
+  { return preg_replace('/[\\x80-\\xff \'"]/e', "'%'.dechex(ord('$0'))", $x); }
 function PQA($x) { 
   return preg_replace('/([a-zA-Z])\\s*=\\s*([^\'">][^\\s>]*)/', "$1='$2'", $x);
 }
@@ -487,6 +494,8 @@ function ResolvePageName($pagename) {
   $pagename = preg_replace('!([./][^./]+)\\.html$!', '$1', $pagename);
   if ($pagename == '') return $DefaultPage;
   $p = MakePageName($DefaultPage, $pagename);
+  if (!preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $p))
+    Abort("?invalid page name");
   if (preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $pagename))
     return $p;
   if (IsEnabled($EnableFixedUrlRedirect, 1)
@@ -509,14 +518,18 @@ function MakePageName($basepage,$x) {
     "/[^$PageNameChars]+/" => ' ',         # convert everything else to space
     "/((^|[^-\\w])\\w)/e" => "strtoupper('$1')",
     "/ /" => ''));
-  if (!preg_match('/(?:([^.\\/]+)[.\\/])?([^.\\/]+)$/',$x,$m)) return '';
-  $name = preg_replace(array_keys($MakePageNamePatterns),
-            array_values($MakePageNamePatterns), $m[2]);
-  if ($m[1]) {
+  $m = preg_split('/[.\\/]/', $x);
+  if (count($m)<1 || count($m)>2 || $m[0]=='') return '';
+  if ($m[1] > '') {
     $group = preg_replace(array_keys($MakePageNamePatterns),
-               array_values($MakePageNamePatterns), $m[1]);
+               array_values($MakePageNamePatterns), $m[0]);
+    $name = preg_replace(array_keys($MakePageNamePatterns),
+              array_values($MakePageNamePatterns), $m[1]);
     return "$group.$name";
   }
+  $name = preg_replace(array_keys($MakePageNamePatterns),
+            array_values($MakePageNamePatterns), $m[0]);
+  if (count($m)>1) { $basepage = "$name.$name"; }
   foreach((array)$PagePathFmt as $pg) {
     $pn = FmtPageName(str_replace('$1',$name,$pg),$basepage);
     if (PageExists($pn)) return $pn;
@@ -757,7 +770,7 @@ class PageStore {
     $out = array();
     while (count($dirlist)>0) {
       $dir = array_shift($dirlist);
-      $dfp = opendir($dir); if (!$dfp) { continue; }
+      $dfp = @opendir($dir); if (!$dfp) { continue; }
       $o = array();
       while ( ($pagefile = readdir($dfp)) !== false) {
         if ($pagefile{0} == '.') continue;
@@ -950,8 +963,8 @@ function IncludeText($pagename, $inclspec) {
       $upat = ($k{0} == 'p') ? ".*?(\n\\s*\n|$)" : "[^\n]*(?:\n|$)";
       if (!$dots) { $b=$a; $a=0; }
       if ($a>0) $a--;
-      $itext=preg_replace("/^(($upat)\{0,$b}).*$/s",'$1',$itext,1);
-      $itext=preg_replace("/^($upat)\{0,$a}/s",'',$itext,1);
+      $itext=preg_replace("/^(($upat){0,$b}).*$/s",'$1',$itext,1);
+      $itext=preg_replace("/^($upat){0,$a}/s",'',$itext,1);
       continue;
     }
   }
@@ -1026,6 +1039,22 @@ function Block($b) {
   }
   return $out;
 }
+
+
+function MarkupClose($key = '') {
+  global $MarkupFrame;
+  $cf = & $MarkupFrame[0]['closeall'];
+  $out = '';
+  if ($key == '' || isset($cf[$key])) {
+    $k = array_keys((array)$cf);
+    while ($k) { 
+      $x = array_pop($k); $out .= $cf[$x]; unset($cf[$x]);
+      if ($x == $key) break;
+    }
+  }
+  return $out;
+}
+
 
 function FormatTableRow($x) {
   global $Block, $TableCellAttrFmt, $MarkupFrame, $TableRowAttrFmt, 
@@ -1119,8 +1148,10 @@ function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
   else {
     if (is_null($txt)) {
       $txt = preg_replace('/\\([^)]*\\)/','',$tgt);
-      if ($m[1]=='<:page>') $txt = preg_replace('!^.*[^<]/!','',$txt);
-      $txt = $txt;
+      if ($m[1]=='<:page>') {
+        $txt = preg_replace('!/\\s*$!', '', $txt);
+        $txt = preg_replace('!^.*[^<]/!', '', $txt);
+      }
     }
     $txt .= $suffix;
   }
