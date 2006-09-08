@@ -31,13 +31,14 @@ StopWatch('PmWiki');
 @ini_set('magic_quotes_sybase', 0);
 if (ini_get('register_globals')) 
   foreach($_REQUEST as $k=>$v) { 
-    if (preg_match('/^(GLOBALS|_SERVER|_GET|_POST|_COOKIE|_FILES|_ENV|_REQUEST|_SESSION)$/i', $k)) exit();
-    unset(${$k}); 
+    if (preg_match('/^(GLOBALS|_SERVER|_GET|_POST|_COOKIE|_FILES|_ENV|_REQUEST|_SESSION|FarmD|WikiDir)$/i', $k)) exit();
+    ${$k}=''; unset(${$k}); 
   }
 $UnsafeGlobals = array_keys($GLOBALS); $GCount=0; $FmtV=array();
 SDV($FarmD,dirname(__FILE__));
 SDV($WorkDir,'wiki.d');
 define('PmWiki',1);
+if (preg_match('/\\w\\w:/', $FarmD)) exit();
 @include_once("$FarmD/scripts/version.php");
 $GroupPattern = '[[:upper:]][\\w]*(?:-\\w+)*';
 $NamePattern = '[[:upper:]\\d][\\w]*(?:-\\w+)*';
@@ -45,6 +46,7 @@ $BlockPattern = 'form|div|table|t[rdh]|p|[uo]l|d[ltd]|h[1-6r]|pre|blockquote';
 $WikiWordPattern = '[[:upper:]][[:alnum:]]*(?:[[:upper:]][[:lower:]0-9]|[[:lower:]0-9][[:upper:]])[[:alnum:]]*';
 $WikiDir = new PageStore('wiki.d/{$FullName}');
 $WikiLibDirs = array(&$WikiDir,new PageStore('$FarmD/wikilib.d/{$FullName}'));
+$LocalDir = 'local';
 $InterMapFiles = array("$FarmD/scripts/intermap.txt",
   "$FarmD/local/farmmap.txt", '$SiteGroup.InterMap', 'local/localmap.txt');
 $Newline = "\263";                                 # deprecated, 2.0.0
@@ -172,12 +174,12 @@ $PageStartFmt = array(&$HTMLStartFmt,"\n<div id='contents'>\n");
 $PageEndFmt = array('</div>',&$HTMLEndFmt);
 
 $HandleActions = array(
-  'browse' => 'HandleBrowse',
+  'browse' => 'HandleBrowse', 'print' => 'HandleBrowse',
   'edit' => 'HandleEdit', 'source' => 'HandleSource', 
   'attr' => 'HandleAttr', 'postattr' => 'HandlePostAttr',
   'logout' => 'HandleLogoutA', 'login' => 'HandleLoginA');
 $HandleAuth = array(
-  'browse' => 'read', 'source' => 'read',
+  'browse' => 'read', 'source' => 'read', 'print' => 'read',
   'edit' => 'edit', 'attr' => 'attr', 'postattr' => 'attr',
   'logout' => 'read', 'login' => 'login');
 $ActionTitleFmt = array(
@@ -290,8 +292,8 @@ $FmtPV['$RequestedPage'] = "'".htmlspecialchars($pagename, ENT_QUOTES)."'";
 if (file_exists("$FarmD/local/farmconfig.php")) 
   include_once("$FarmD/local/farmconfig.php");
 if (IsEnabled($EnableLocalConfig,1)) {
-  if (file_exists('local/config.php')) 
-    include_once('local/config.php');
+  if (file_exists("$LocalDir/config.php")) 
+    include_once("$LocalDir/config.php");
   elseif (file_exists('config.php'))
     include_once('config.php');
 }
@@ -331,6 +333,8 @@ return;
 ## helper functions
 function stripmagic($x) 
   { return get_magic_quotes_gpc() ? stripslashes($x) : $x; }
+function pre_r(&$x)
+  { return '<pre>'.htmlspecialchars(print_r($x, true)).'</pre>'; }
 function PSS($x) 
   { return str_replace('\\"','"',$x); }
 function PVS($x) 
@@ -341,7 +345,18 @@ function PRR($x=NULL)
 function PUE($x)
   { return preg_replace('/[\\x80-\\xff \'"]/e', "'%'.dechex(ord('$0'))", $x); }
 function PQA($x) { 
-  return preg_replace('/([a-zA-Z])\\s*=\\s*([^\'">][^\\s>]*)/', "$1='$2'", $x);
+  $out = '';
+  if (preg_match_all('/([a-zA-Z]+)\\s*=\\s*("[^"]*"|\'[^\']*\'|\\S*)/',
+                     $x, $attr, PREG_SET_ORDER)) {
+    foreach($attr as $a) {
+      if (preg_match('/^on/i', $a[1])) continue;
+      $out .= $a[1] . '=' 
+              . preg_replace( '/^(?![\'"]).*$/e', 
+                  "\"'\".str_replace(\"'\", '&#39;', PSS('$0')).\"'\"", $a[2])
+              . ' ';
+    }
+  }
+  return $out;
 }
 function SDV(&$v,$x) { if (!isset($v)) $v=$x; }
 function SDVA(&$var,$val) 
@@ -575,7 +590,7 @@ function PageVar($pagename, $var, $pn = '') {
   if (preg_match('/^(.+)[.\\/]([^.\\/]+)$/', $pn, $match)
       && !isset($PCache[$pn]['time']) 
       && (!@$FmtPV[$var] || strpos($FmtPV[$var], '$page') !== false)) 
-    PCache($pn, ReadPage($pn, READPAGE_CURRENT));
+    { $page = ReadPage($pn, READPAGE_CURRENT); PCache($pn, $page); }
   @list($d, $group, $name) = $match;
   $page = &$PCache[$pn];
   if (@$FmtPV[$var]) return eval("return ({$FmtPV[$var]});");
@@ -702,7 +717,7 @@ class PageStore {
         if ($k == 'version') { 
           $ordered = (strpos($v, 'ordered=1') !== false); 
           $urlencoded = (strpos($v, 'urlencoded=1') !== false); 
-          if (strpos($v, 'pmwiki-0.')) $newline="\262";
+          if (strpos($v, 'pmwiki-0.')!==false) $newline="\262";
         }
         if ($k == 'newline') { $newline = $v; continue; }
         if ($since > 0 && preg_match('/:(\\d+)/', $k, $m) && $m[1] < $since) {
@@ -813,14 +828,13 @@ function WritePage($pagename,$page) {
 }
 
 function PageExists($pagename) {
-  global $WikiLibDirs;
-  static $pe;
-  if (!isset($pe[$pagename])) {
-    $pe[$pagename] = false;
+  ##  note:  $PageExistsCache might change or disappear someday
+  global $WikiLibDirs, $PageExistsCache;
+  if (!isset($PageExistsCache[$pagename])) {
     foreach((array)$WikiLibDirs as $dir)
-      if ($dir->exists($pagename)) { $pe[$pagename] = true; break; }
+      if ($PageExistsCache[$pagename] = $dir->exists($pagename)) break;
   }
-  return $pe[$pagename];
+  return $PageExistsCache[$pagename];
 }
 
 function ListPages($pat=NULL) {
@@ -909,7 +923,7 @@ function Keep($x, $pool=NULL) {
   # Keep preserves a string from being processed by wiki markups
   global $BlockPattern, $KeepToken, $KPV, $KPCount;
   $x = preg_replace("/$KeepToken(\\d.*?)$KeepToken/e", "\$KPV['\$1']", $x);
-  if (is_null($pool) && preg_match("/<($BlockPattern)\\b/", $x)) $pool = 'B';
+  if (is_null($pool) && preg_match("!</?($BlockPattern)\\b!", $x)) $pool = 'B';
   $KPCount++; $KPV[$KPCount.$pool]=$x;
   return $KeepToken.$KPCount.$pool.$KeepToken;
 }
@@ -1495,18 +1509,19 @@ function PmWikiAuth($pagename, $level, $authprompt=true, $since=0) {
     $AuthList["id:*"] = 1;
   }
   $gn = FmtPageName($GroupAttributesFmt, $pagename);
-  if (!isset($acache[$gn])) $gp = ReadPage($gn, READPAGE_CURRENT);
-  foreach($DefaultPasswords as $k => $v) {
-    if (isset($gp)) {
+  if (!isset($acache[$gn])) {
+    $gp = ReadPage($gn, READPAGE_CURRENT);
+    foreach($DefaultPasswords as $k => $v) {
       $x = array(2, array(), '');
       $acache['@site'][$k] = IsAuthorized($v, 'site', $x);
       $AuthList["@_site_$k"] = $acache['@site'][$k][0] ? 1 : 0;
       $acache[$gn][$k] = IsAuthorized($gp["passwd$k"], 'group', 
                                       $acache['@site'][$k]);
     }
+  }
+  foreach($DefaultPasswords as $k => $v) 
     list($page['=auth'][$k], $page['=passwd'][$k], $page['=pwsource'][$k]) =
       IsAuthorized($page["passwd$k"], 'page', $acache[$gn][$k]);
-  }
   foreach($AuthCascade as $k => $t) {
     if ($page['=auth'][$k]+0 == 2) {
       $page['=auth'][$k] = $page['=auth'][$t];
@@ -1517,7 +1532,7 @@ function PmWikiAuth($pagename, $level, $authprompt=true, $since=0) {
   if (@$page['=auth']['admin']) 
     foreach($page['=auth'] as $lv=>$a) @$page['=auth'][$lv] = 3;
   if (@$page['=passwd']['read']) $NoHTMLCache |= 2;
-  if (@$page['=auth'][$level]) return $page;
+  if ($level=='ALWAYS' || @$page['=auth'][$level]) return $page;
   if (!$authprompt) return false;
   $GLOBALS['AuthNeeded'] = (@$_POST['authpw']) 
     ? $page['=pwsource'][$level] . ' ' . $level : '';
@@ -1590,7 +1605,7 @@ function SessionAuth($pagename, $auth = NULL) {
   $sid = session_id();
   @session_start();
   foreach((array)$auth as $k => $v)
-    if ($k) $_SESSION[$k] = array_merge((array)$_SESSION[$k], (array)$v);
+    if ($k) $_SESSION[$k] = (array)$v + (array)$_SESSION[$k];
 
   if (!isset($AuthId)) $AuthId = @end($_SESSION['authid']);
   $AuthPw = array_keys((array)@$_SESSION['authpw']);

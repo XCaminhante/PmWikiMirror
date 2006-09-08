@@ -40,7 +40,9 @@ else SessionAuth($pagename);
 function AuthUserId($pagename, $id, $pw=NULL) {
   global $AuthUser, $AuthUserPageFmt, $AuthUserFunctions, 
     $AuthId, $MessagesFmt;
-  $auth = $AuthUser; $authid = '';
+
+  foreach((array)$AuthUser as $k=>$v) $auth[$k] = (array)$v;
+  $authid = '';
 
   # load information from Site.AuthUser (or page in $AuthUserPageFmt)
   SDV($AuthUserPageFmt, '$SiteGroup.AuthUser');
@@ -55,7 +57,7 @@ function AuthUserId($pagename, $id, $pw=NULL) {
   if ($apage && preg_match_all("/^\\s*([@\\w][^\\s:]*):(.*)/m", 
                                $apage['text'], $matches, PREG_SET_ORDER)) {
     foreach($matches as $m) {
-      if (!preg_match_all('/\\bldap:\\S+|[^\\s,]+/', $m[2], $v))
+      if (!preg_match_all('/\\bldaps?:\\S+|[^\\s,]+/', $m[2], $v))
         continue;
       if ($m[1]{0} == '@') 
         foreach($v[0] as $g) $auth[$g][] = $m[1];
@@ -77,6 +79,12 @@ function AuthUserId($pagename, $id, $pw=NULL) {
     $authlist[$g] = 1;
   foreach(preg_grep('/^@/', (array)@$auth['*']) as $g) 
     $authlist[$g] = 1;
+  foreach(preg_grep('/^@/', array_keys($auth)) as $g) 
+    if (in_array($authid, $auth[$g])) $authlist[$g] = 1;
+  if ($auth['htgroup']) {
+    foreach(AuthUserHtGroup($pagename, $id, $pw, $auth['htgroup']) as $g)
+      $authlist["@$g"] = 1;
+  }
   SessionAuth($pagename, array('authid' => $authid, 'authlist' => $authlist));
 }
 
@@ -102,25 +110,41 @@ function AuthUserHtPasswd($pagename, $id, $pw, $pwlist) {
 }
 
 
+function AuthUserHtGroup($pagename, $id, $pw, $pwlist) {
+  $groups = array();
+  foreach ((array)$pwlist as $f) {
+    $fp = fopen($f, 'r'); if (!$fp) continue;
+    while ($x = fgets($fp, 4096)) {
+      if (preg_match('/^(\\w[^\\s:]+)\\s*:(.*)$/', trim($x), $match)) {
+        $glist = preg_split('/[\\s,]+/', $match[2], -1, PREG_SPLIT_NO_EMPTY);
+        if (in_array($id, $glist)) $groups[$match[1]] = 1;
+      }
+    }
+    fclose($fp);
+  }
+  return array_keys($groups);
+}
+  
+
 function AuthUserLDAP($pagename, $id, $pw, $pwlist) {
   global $AuthLDAPBindDN, $AuthLDAPBindPassword;
   if (!$pw) return false;
   if (!function_exists('ldap_connect')) return false;
   foreach ((array)$pwlist as $ldap) {
-    if (!preg_match('!ldap://([^:]+)(?::(\\d+))?/(.+)$!', $ldap, $match))
+    if (!preg_match('!(ldaps?://[^/]+)/(.+)$!', $ldap, $match))
       continue;
-    list($z, $server, $port, $path) = $match;
-    list($basedn, $attr, $sub) = explode('?', $path);
-    if (!$port) $port = 389;
+    list($z, $url, $path) = $match;
+    list($basedn, $attr, $sub, $filter) = explode('?', $path);
     if (!$attr) $attr = 'uid';
     if (!$sub) $sub = 'one';
+    if (!$filter) $filter = '(objectClass=*)';
     $binddn = @$AuthLDAPBindDN;
     $bindpw = @$AuthLDAPBindPassword;
-    $ds = ldap_connect($server, $port);
+    $ds = ldap_connect($url);
     ldap_set_option($ds, LDAP_OPT_PROTOCOL_VERSION, 3);
     if (ldap_bind($ds, $binddn, $bindpw)) {
       $fn = ($sub == 'sub') ? 'ldap_search' : 'ldap_list';
-      $sr = $fn($ds, $basedn, "($attr=$id)", array($attr));
+      $sr = $fn($ds, $basedn, "(&$filter($attr=$id))", array($attr));
       $x = ldap_get_entries($ds, $sr);
       if ($x['count'] == 1) {
         $dn = $x[0]['dn'];

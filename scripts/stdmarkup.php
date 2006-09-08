@@ -145,7 +145,7 @@ Markup('&','directives','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
 Markup('title','>&',
   '/\\(:title\\s(.*?):\\)/ei',
   "PZZ(PCache(\$pagename, 
-         array('title' => SetProperty(\$pagename, 'title', PSS('$1')))))");
+         \$zz=array('title' => SetProperty(\$pagename, 'title', PSS('$1')))))");
 
 ## (:keywords:), (:description:)
 Markup('keywords', '>&', 
@@ -331,7 +331,7 @@ Markup('^||||', 'block',
   "FormatTableRow(PSS('$0'))");
 ## ||table attributes
 Markup('^||','>^||||','/^\\|\\|(.*)$/e',
-  "PZZ(\$GLOBALS['BlockMarkups']['table'][0] = PQA(PSS('<table $1>')))
+  "PZZ(\$GLOBALS['BlockMarkups']['table'][0] = '<table '.PQA(PSS('$1')).'>')
     .'<:block,1>'");
 
 ## headings
@@ -346,7 +346,7 @@ Markup('^----','>^->','/^----+/','<:block,1><hr />');
 
 function Cells($name,$attr) {
   global $MarkupFrame;
-  $attr = preg_replace('/([a-zA-Z]=)([^\'"]\\S*)/',"\$1'\$2'",$attr);
+  $attr = PQA($attr);
   $tattr = @$MarkupFrame[0]['tattr'];
   $name = strtolower($name);
   $key = preg_replace('/end$/', '', $name);
@@ -407,7 +407,7 @@ Markup('markupend', '>markup',
   "/\\(:markup(\\s+([^\n]*?))?:\\)[^\\S\n]*\n(.*?)\\(:markupend:\\)/sei",
   "MarkupMarkup(\$pagename, PSS('$3'), PSS('$1'))");
 
-$HTMLStylesFmt['markup'] = "
+SDV($HTMLStylesFmt['markup'], "
   table.markup { border:2px dotted #ccf; width:90%; }
   td.markup1, td.markup2 { padding-left:10px; padding-right:10px; }
   table.vert td.markup1 { border-bottom:1px solid #ccf; }
@@ -415,7 +415,7 @@ $HTMLStylesFmt['markup'] = "
   table.markup caption { text-align:left; }
   div.faq p, div.faq pre { margin-left:2em; }
   div.faq p.question { margin:1em 0 0.75em 0; font-weight:bold; }
-  ";
+  ");
 
 #### Special conditions ####
 ## The code below adds (:if date:) conditions to the markup.
