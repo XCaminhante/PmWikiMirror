@@ -37,6 +37,12 @@ $WikiTitle = 'PmWiki';
 ## and PmWiki.PasswordsAdmin.
 # $DefaultPasswords['admin'] = crypt('secret');
 
+## If you're running a publicly available site and allow anyone to
+## edit without requiring a password, you probably want to put some
+## blocklists in place to avoid wikispam.  See PmWiki.Blocklist.
+# $EnableBlocklist = 1;                    # enable manual blocklists
+# $EnableBlocklist = 10;                   # enable automatic blocklists
+
 ##  PmWiki comes with graphical user interface buttons for editing;
 ##  to enable these buttons, set $EnableGUIButtons to 1.  
 # $EnableGUIButtons = 1;
@@ -109,6 +115,12 @@ $WikiTitle = 'PmWiki';
 # if ($action == 'atom') include_once('scripts/feeds.php');  # Atom 1.0
 # if ($action == 'dc') include_once('scripts/feeds.php');    # Dublin Core
 # if ($action == 'rdf') include_once('scripts/feeds.php');   # RSS 1.0
+
+##  In the 2.2.0-beta series, {$var} page variables are absolute by
+##  default, but a future version will make them relative.  This setting
+##  sets them out as relative to begin with.  (If you're starting a new
+##  site, it's probably best to leave this setting alone.)
+$EnableRelativePageVars = 1;
 
 ##  PmWiki allows a great deal of flexibility for creating custom markup.
 ##  To add support for '*bold*' and '~italic~' markup (the single quotes

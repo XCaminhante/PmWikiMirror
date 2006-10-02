@@ -96,8 +96,8 @@ $CookiePrefix = '';
 $SiteGroup = 'Site';
 $DefaultGroup = 'Main';
 $DefaultName = 'HomePage';
-$GroupHeaderFmt = '(:include {$Group}.GroupHeader self=0:)(:nl:)';
-$GroupFooterFmt = '(:nl:)(:include {$Group}.GroupFooter self=0:)';
+$GroupHeaderFmt = '(:include {$Group}.GroupHeader self=0 basepage={*$FullName}:)(:nl:)';
+$GroupFooterFmt = '(:nl:)(:include {$Group}.GroupFooter self=0 basepage={*$FullName}:)';
 $PagePathFmt = array('{$Group}.$1','$1.$1','$1.{$DefaultName}');
 $PageAttributes = array(
   'passwdread' => '$[Set new read password:]',
@@ -135,6 +135,7 @@ $FmtPV = array(
   '$AuthId'       => 'NoCache($GLOBALS["AuthId"])',
   '$DefaultGroup' => '$GLOBALS["DefaultGroup"]',
   '$DefaultName'  => '$GLOBALS["DefaultName"]',
+  '$BaseName'     => 'MakeBaseName($pn)',
   '$Action'       => '$GLOBALS["action"]',
   );
 $SaveProperties = array('title', 'description', 'keywords');
@@ -288,6 +289,7 @@ if (preg_match('/[\\x80-\\xbf]/',$pagename))
   $pagename=utf8_decode($pagename);
 $pagename = preg_replace('![^[:alnum:]\\x80-\\xff]+$!','',$pagename);
 $FmtPV['$RequestedPage'] = "'".htmlspecialchars($pagename, ENT_QUOTES)."'";
+$Cursor['*'] = &$pagename;
 
 if (file_exists("$FarmD/local/farmconfig.php")) 
   include_once("$FarmD/local/farmconfig.php");
@@ -366,9 +368,9 @@ function IsEnabled(&$var,$f=0)
 function SetTmplDisplay($var, $val) 
   { NoCache(); $GLOBALS['TmplDisplay'][$var] = $val; }
 function NoCache($x = '') { $GLOBALS['NoHTMLCache'] |= 1; return $x; }
-function ParseArgs($x) {
+function ParseArgs($x, $optpat = '(?>(\\w+)[:=])') {
   $z = array();
-  preg_match_all('/([-+]|(?>(\\w+)[:=]))?("[^"]*"|\'[^\']*\'|\\S+)/',
+  preg_match_all("/($optpat|[-+])?(\"[^\"]*\"|'[^']*'|\\S+)/",
     $x, $terms, PREG_SET_ORDER);
   foreach($terms as $t) {
     $v = preg_replace('/^([\'"])?(.*)\\1$/', '$2', $t[3]);
@@ -519,21 +521,22 @@ function ResolvePageName($pagename) {
   return MakePageName($DefaultPage, "$pagename.$pagename");
 }
 
-## MakePageName is used to convert a string into a valid pagename.
-## If no group is supplied, then it uses $PagePathFmt to look
-## for the page in other groups, or else uses the group of the
-## pagename passed as an argument.
-function MakePageName($basepage,$x) {
+## MakePageName is used to convert a string $str into a fully-qualified
+## pagename.  If $str doesn't contain a group qualifier, then 
+## MakePageName uses $basepage and $PagePathFmt to determine the 
+## group of the returned pagename.
+function MakePageName($basepage, $str) {
   global $MakePageNameFunction, $PageNameChars, $PagePathFmt,
     $MakePageNamePatterns;
-  if (@$MakePageNameFunction) return $MakePageNameFunction($basepage,$x);
+  if (@$MakePageNameFunction) return $MakePageNameFunction($basepage, $str);
   SDV($PageNameChars,'-[:alnum:]');
   SDV($MakePageNamePatterns, array(
     "/'/" => '',			   # strip single-quotes
     "/[^$PageNameChars]+/" => ' ',         # convert everything else to space
-    "/((^|[^-\\w])\\w)/e" => "strtoupper('$1')",
-    "/ /" => ''));
-  $m = preg_split('/[.\\/]/', $x);
+    '/((^|[^-\\w])\\w)/e' => "strtoupper('$1')",
+    '/ /' => ''));
+  $str = preg_replace('/[#?].*$/', '', $str);
+  $m = preg_split('/[.\\/]/', $str);
   if (count($m)<1 || count($m)>2 || $m[0]=='') return '';
   if ($m[1] > '') {
     $group = preg_replace(array_keys($MakePageNamePatterns),
@@ -552,6 +555,19 @@ function MakePageName($basepage,$x) {
   $group=preg_replace('/[\\/.].*$/','',$basepage);
   return "$group.$name";
 }
+
+
+## MakeBaseName uses $BaseNamePatterns to return the "base" form
+## of a given pagename -- i.e., stripping any recipe-defined
+## prefixes or suffixes from the page.
+function MakeBaseName($pagename, $patlist = NULL) {
+  global $BaseNamePatterns;
+  $patlist = (array)@$BaseNamePatterns;
+  foreach($patlist as $pat => $rep) 
+    $pagename = preg_replace($pat, $rep, $pagename);
+  return $pagename;
+}
+
 
 ## PCache caches basic information about a page and its attributes--
 ## usually everything except page text and page history.  This makes
@@ -579,6 +595,26 @@ function SetProperty($pagename, $prop, $value, $sep = NULL) {
 }
 
 
+## PageTextVar loads a page's text variables (defined by
+## $PageTextVarPatterns) into a page's $PCache entry, and returns
+## the property associated with $var.
+function PageTextVar($pagename, $var) {
+  global $PCache, $PageTextVarPatterns;
+  if (!@$PCache[$pagename]['=pagetextvars']) {
+    $pc = &$PCache[$pagename];
+    $pc['=pagetextvars'] = 1;
+    $page = RetrieveAuthPage($pagename, 'read', false, READPAGE_CURRENT);
+    if ($page) {
+      foreach((array)$PageTextVarPatterns as $pat) 
+        if (preg_match_all($pat, $page['text'], $match, PREG_SET_ORDER))
+          foreach($match as $m)  
+            $pc["=p_{$m[1]}"] = Qualify($pagename, $m[2]);
+    }
+  }
+  return $PCache[$pagename]["=p_$var"];
+}
+
+
 function PageVar($pagename, $var, $pn = '') {
   global $Cursor, $PCache, $FmtPV, $AsSpacedFunction, $ScriptUrl,
     $EnablePathInfo;
@@ -594,8 +630,10 @@ function PageVar($pagename, $var, $pn = '') {
   @list($d, $group, $name) = $match;
   $page = &$PCache[$pn];
   if (@$FmtPV[$var]) return eval("return ({$FmtPV[$var]});");
+  if (strncmp($var, '$:', 2)==0) return PageTextVar($pn, substr($var, 2));
   return '';
 }
+
   
 ## FmtPageName handles $[internationalization] and $Variable 
 ## substitutions in strings based on the $pagename argument.
@@ -913,7 +951,7 @@ function PrintWikiPage($pagename, $wikilist=NULL, $auth='read') {
       $page = ($auth) ? RetrieveAuthPage($p, $auth, false, READPAGE_CURRENT)
               : ReadPage($p, READPAGE_CURRENT);
       if ($page['text']) 
-        echo MarkupToHTML($pagename,$page['text']);
+        echo MarkupToHTML($pagename,Qualify($p, $page['text']));
       return;
     }
   }
@@ -927,6 +965,35 @@ function Keep($x, $pool=NULL) {
   $KPCount++; $KPV[$KPCount.$pool]=$x;
   return $KeepToken.$KPCount.$pool.$KeepToken;
 }
+
+
+##  MarkupEscape examines markup source and escapes any [@...@]
+##  and [=...=] sequences using Keep().  MarkupRestore undoes the
+##  effect of any MarkupEscape().
+function MarkupEscape($text) {
+  global $EscapePattern;
+  SDV($EscapePattern, '\\[([=@]).*?\\1\\]');
+  return preg_replace("/$EscapePattern/es", "Keep(PSS('$0'))", $text);
+}
+function MarkupRestore($text) {
+  global $KeepToken, $KPV;
+  return preg_replace("/$KeepToken(\\d.*?)$KeepToken/e", "\$KPV['$1']", $text);
+}
+
+
+##  Qualify() applies $QualifyPatterns to convert relative links
+##  and references into absolute equivalents.
+function Qualify($pagename, $text) {
+  global $QualifyPatterns, $KeepToken, $KPV;
+  if (!@$QualifyPatterns) return $text;
+  $text = MarkupEscape($text);
+  $group = PageVar($pagename, '$Group');
+  $name = PageVar($pagename, '$Name');
+  foreach((array)$QualifyPatterns as $pat => $rep) 
+    $text = preg_replace($pat, $rep, $text);
+  return MarkupRestore($text);
+}
+
 
 function CondText($pagename,$condspec,$condtext) {
   global $Conditions;
@@ -942,11 +1009,12 @@ function CondText($pagename,$condspec,$condtext) {
 
 
 function IncludeText($pagename, $inclspec) {
-  global $MaxIncludes, $InclCount;
+  global $MaxIncludes, $IncludeOpt, $InclCount;
   SDV($MaxIncludes,50);
+  SDVA($IncludeOpt, array('self'=>1));
   $npat = '[[:alpha:]][-\\w]*';
   if ($InclCount++>=$MaxIncludes) return Keep($inclspec);
-  $args = array_merge(array('self' => 1), ParseArgs($inclspec));
+  $args = array_merge($IncludeOpt, ParseArgs($inclspec));
   while (count($args['#'])>0) {
     $k = array_shift($args['#']); $v = array_shift($args['#']);
     if ($k=='') {
@@ -982,7 +1050,11 @@ function IncludeText($pagename, $inclspec) {
       continue;
     }
   }
-  return PVS(htmlspecialchars(@$itext, ENT_NOQUOTES));
+  $basepage = isset($args['basepage']) 
+              ? MakePageName($pagename, $args['basepage'])
+              : $iname;
+  if ($basepage) $itext = Qualify(@$basepage, @$itext);
+  return PVS(htmlspecialchars($itext, ENT_NOQUOTES));
 }
 
 
