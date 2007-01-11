@@ -54,11 +54,14 @@ $KeepToken = "\235\235";
 $Now=time();
 define('READPAGE_CURRENT', $Now+604800);
 $TimeFmt = '%B %d, %Y, at %I:%M %p';
+$TimeISOFmt = '%Y-%m-%dT%H:%M:%S';
+$TimeISOZFmt = '%Y-%m-%dT%H:%M:%SZ';
 $MessagesFmt = array();
 $BlockMessageFmt = "<h3 class='wikimessage'>$[This post has been blocked by the administrator]</h3>";
 $EditFields = array('text');
 $EditFunctions = array('EditTemplate', 'RestorePage', 'ReplaceOnSave',
-  'SaveAttributes', 'PostPage', 'PostRecentChanges', 'PreviewPage');
+  'SaveAttributes', 'PostPage', 'PostRecentChanges', 'AutoCreateTargets',
+  'PreviewPage');
 $EnablePost = 1;
 $ChangeSummary = substr(stripmagic(@$_REQUEST['csum']), 0, 100);
 $AsSpacedFunction = 'AsSpaced';
@@ -70,8 +73,10 @@ $RecentChangesFmt = array(
     '* [[{$Group}.{$Name}]]  . . . $CurrentTime $[by] $AuthorLink: [=$ChangeSummary=]',
   '$Group.RecentChanges' =>
     '* [[{$Group}/{$Name}]]  . . . $CurrentTime $[by] $AuthorLink: [=$ChangeSummary=]');
-$ScriptUrl = 'http://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'];
-$PubDirUrl = preg_replace('#/[^/]*$#','/pub',$ScriptUrl,1);
+$UrlScheme = (@$_SERVER['HTTPS']=='on' || @$_SERVER['SERVER_PORT']==443)
+             ? 'https' : 'http';
+$ScriptUrl = $UrlScheme.'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'];
+$PubDirUrl = preg_replace('#/[^/]*$#', '/pub', $ScriptUrl, 1);
 $HTMLVSpace = "<vspace>";
 $HTMLPNewline = '';
 $MarkupFrame = array();
@@ -80,6 +85,7 @@ $MarkupFrameBase = array('cs' => array(), 'vs' => '', 'ref' => 0,
   'escape' => 1);
 $WikiWordCountMax = 1000000;
 $WikiWordCount['PmWiki'] = 1;
+$TableRowIndexMax = 1;
 $UrlExcludeChars = '<>"{}|\\\\^`()[\\]\'';
 $QueryFragPattern = "[?#][^\\s$UrlExcludeChars]*";
 $SuffixPattern = '(?:-?[[:alnum:]]+)*';
@@ -300,7 +306,8 @@ if (IsEnabled($EnableLocalConfig,1)) {
     include_once('config.php');
 }
 
-SDV($CurrentTime,strftime($TimeFmt,$Now));
+SDV($CurrentTime, strftime($TimeFmt, $Now));
+SDV($CurrentTimeISO, strftime($TimeISOFmt, $Now));
 
 if (IsEnabled($EnableStdConfig,1))
   include_once("$FarmD/scripts/stdconfig.php");
@@ -341,6 +348,7 @@ function PSS($x)
   { return str_replace('\\"','"',$x); }
 function PVS($x) 
   { return preg_replace("/\n[^\\S\n]*(?=\n)/", "\n<:vspace>", $x); }
+function PVSE($x) { return PVS(htmlspecialchars($x, ENT_NOQUOTES)); }
 function PZZ($x,$y='') { return ''; }
 function PRR($x=NULL) 
   { if ($x || is_null($x)) $GLOBALS['RedoMarkupLine']++; return $x; }
@@ -416,7 +424,7 @@ function Lock($op) {
   if (!$lockfp) { 
     @unlink($LockFile); 
     $lockfp = fopen($LockFile,"w") or
-      Abort("Cannot acquire lockfile", "Lockfile");
+      Abort('?cannot acquire lockfile');
     fixperms($LockFile);
   }
   if ($op<0) { flock($lockfp,LOCK_UN); fclose($lockfp); $lockfp=0; $curop=0; }
@@ -458,7 +466,7 @@ function mkdirp($dir) {
 ## so that both PmWiki and the account (current dir) owner can manipulate it
 function fixperms($fname, $add = 0) {
   clearstatcache();
-  if (!file_exists($fname)) Abort('no such file');
+  if (!file_exists($fname)) Abort('?no such file');
   $bp = 0;
   if (fileowner($fname)!=@fileowner('.')) $bp = (is_dir($fname)) ? 007 : 006;
   if (filegroup($fname)==@filegroup('.')) $bp <<= 3;
@@ -472,6 +480,7 @@ function MatchPageNames($pagelist, $pat) {
   $pagelist = (array)$pagelist;
   foreach((array)$pat as $p) {
     if (count($pagelist) < 1) break;
+    if (!$p) continue;
     switch ($p{0}) {
       case '/': 
         $pagelist = preg_grep($p, $pagelist); 
@@ -511,8 +520,10 @@ function ResolvePageName($pagename) {
   $pagename = preg_replace('!([./][^./]+)\\.html$!', '$1', $pagename);
   if ($pagename == '') return $DefaultPage;
   $p = MakePageName($DefaultPage, $pagename);
-  if (!preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $p))
-    Abort("?invalid page name");
+  if (!preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $p)) {
+    header('HTTP/1.1 404 Not Found');
+    Abort('$[?invalid page name]');
+  }
   if (preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $pagename))
     return $p;
   if (IsEnabled($EnableFixedUrlRedirect, 1)
@@ -562,7 +573,7 @@ function MakePageName($basepage, $str) {
 ## prefixes or suffixes from the page.
 function MakeBaseName($pagename, $patlist = NULL) {
   global $BaseNamePatterns;
-  $patlist = (array)@$BaseNamePatterns;
+  if (is_null($patlist)) $patlist = (array)@$BaseNamePatterns;
   foreach($patlist as $pat => $rep) 
     $pagename = preg_replace($pat, $rep, $pagename);
   return $pagename;
@@ -723,8 +734,10 @@ function CmpPageAttr($a, $b) {
 class PageStore {
   var $dirfmt;
   var $iswrite;
-  function PageStore($d='$WorkDir/$FullName', $w=0) 
-    { $this->dirfmt=$d; $this->iswrite=$w; }
+  function PageStore($d='$WorkDir/$FullName', $w=0) { 
+    $this->dirfmt = $d; $this->iswrite = $w; 
+    $GLOBALS['PageExistsCache'] = array();
+  }
   function pagefile($pagename) {
     global $FarmD;
     $dfmt = $this->dirfmt;
@@ -819,17 +832,19 @@ class PageStore {
     $pats=(array)$pats; 
     array_push($pats, "/^$GroupPattern\.$NamePattern$/");
     $dir = $this->pagefile('$Group.$Name');
+    $maxslash = substr_count($dir, '/');
     $dirlist = array(preg_replace('!/*[^/]*\\$.*$!','',$dir));
     $out = array();
     while (count($dirlist)>0) {
       $dir = array_shift($dirlist);
       $dfp = @opendir($dir); if (!$dfp) { continue; }
+      $dirslash = substr_count($dir, '/') + 1;
       $o = array();
       while ( ($pagefile = readdir($dfp)) !== false) {
         if ($pagefile{0} == '.') continue;
-        if (is_dir("$dir/$pagefile"))
+        if ($dirslash < $maxslash && is_dir("$dir/$pagefile"))
           { array_push($dirlist,"$dir/$pagefile"); continue; }
-        $o[] = $pagefile;
+        if ($dirslash == $maxslash) $o[] = $pagefile;
       }
       closedir($dfp);
       StopWatch("PageStore::ls merge {$this->dir}");
@@ -891,8 +906,9 @@ function RetrieveAuthPage($pagename, $level, $authprompt=true, $since=0) {
 
 function Abort($msg) {
   # exit pmwiki with an abort message
-  echo "<h3>PmWiki can't process your request</h3>
+  $msg = "<h3>$[PmWiki can't process your request]</h3>
     <p>$msg</p><p>We are sorry for any inconvenience.</p>";
+  echo preg_replace('/\\$\\[([^\\]]+)\\]/e',"XL(PSS('$1'))", $msg);
   exit;
 }
 
@@ -1054,7 +1070,7 @@ function IncludeText($pagename, $inclspec) {
               ? MakePageName($pagename, $args['basepage'])
               : $iname;
   if ($basepage) $itext = Qualify(@$basepage, @$itext);
-  return PVS(htmlspecialchars($itext, ENT_NOQUOTES));
+  return PVSE($itext);
 }
 
 
@@ -1151,7 +1167,7 @@ function FormatTableRow($x) {
   for($i=0;$i<count($td);$i++) {
     if ($td[$i]=='') continue;
     $FmtV['$TableCellCount'] = $i;
-    $attr = FmtPageName($TableCellAttrFmt, '');
+    $attr = FmtPageName(@$TableCellAttrFmt, '');
     $td[$i] = preg_replace('/^(!?)\\s+$/', '$1&nbsp;', $td[$i]);
     if (preg_match('/^!(.*?)!$/',$td[$i],$match))
       { $td[$i]=$match[1]; $t='caption'; $attr=''; }
@@ -1170,14 +1186,14 @@ function FormatTableRow($x) {
   if (@$MarkupFrame[0]['cs'][0] != 'table') $rowcount = 0; else $rowcount++;
   $FmtV['$TableRowCount'] = $rowcount + 1;
   $FmtV['$TableRowIndex'] = ($rowcount % $TableRowIndexMax) + 1;
-  $trattr = FmtPageName($TableRowAttrFmt, '');
+  $trattr = FmtPageName(@$TableRowAttrFmt, '');
   return "<:table,1><tr $trattr>$y</tr>";
 }
 
 function WikiLink($pagename, $word) {
-  global $LinkWikiWords, $SpaceWikiWords, $AsSpacedFunction, 
+  global $LinkWikiWords, $WikiWordCount, $SpaceWikiWords, $AsSpacedFunction, 
     $MarkupFrame, $WikiWordCountMax;
-  if (!$LinkWikiWords) return $word;
+  if (!$LinkWikiWords || ($WikiWordCount[$word] < 0)) return $word;
   $text = ($SpaceWikiWords) ? $AsSpacedFunction($word) : $word;
   $text = preg_replace('!.*/!', '', $text);
   if (!isset($MarkupFrame[0]['wwcount'][$word]))
@@ -1272,7 +1288,7 @@ function DisableMarkup() {
   while (count($idlist)>0) {
     $id = array_shift($idlist);
     if (is_array($id)) { $idlist = array_merge($idlist, $id); continue; }
-    $MarkupTable[$id] = array('cmd' => 'none', pat=>'');
+    $MarkupTable[$id] = array('cmd' => 'none', 'pat'=>'');
   }
 }
     
@@ -1299,8 +1315,7 @@ function MarkupToHTML($pagename, $text, $opt = NULL) {
   $MarkupFrame[0]['wwcount'] = $WikiWordCount;
   $markrules = BuildMarkupRules();
   foreach((array)$text as $l) 
-    $lines[] = $MarkupFrame[0]['escape'] 
-               ? PVS(htmlspecialchars($l, ENT_NOQUOTES)) : $l;
+    $lines[] = $MarkupFrame[0]['escape'] ? PVSE($l) : $l;
   $lines[] = '(:closeall:)';
   $out = '';
   while (count($lines)>0) {
@@ -1326,7 +1341,7 @@ function HandleBrowse($pagename, $auth = 'read') {
     $EnableHTMLCache, $NoHTMLCache, $PageCacheFile, $LastModTime, $IsHTMLCached,
     $FmtV, $HandleBrowseFmt, $PageStartFmt, $PageEndFmt, $PageRedirectFmt;
   $page = RetrieveAuthPage($pagename, $auth, true, READPAGE_CURRENT);
-  if (!$page) Abort('?cannot read $pagename');
+  if (!$page) Abort("?cannot read $pagename");
   PCache($pagename,$page);
   if (PageExists($pagename)) $text = @$page['text'];
   else {
@@ -1363,6 +1378,23 @@ function HandleBrowse($pagename, $auth = 'read') {
     &$PageEndFmt));
   PrintFmt($pagename,$HandleBrowseFmt);
 }
+
+
+## UpdatePage goes through all of the steps needed to update a page,
+## preserving page history, computing link targets, page titles, 
+## and other page attributes.  It does this by calling each entry
+## in $EditFunctions.  $pagename is the name of the page to be updated,
+## $page is the old version of the page (used for page history),
+## $new is the new version of the page to be saved, and $fnlist is
+## an optional list of functions to use instead of $EditFunctions.
+function UpdatePage(&$pagename, &$page, &$new, $fnlist = NULL) {
+  global $EditFunctions, $IsPagePosted;
+  if (is_null($fnlist)) $fnlist = $EditFunctions;
+  $IsPagePosted = false;
+  foreach((array)$fnlist as $fn) $fn($pagename, $page, $new);
+  return $IsPagePosted;
+}
+
 
 # EditTemplate allows a site administrator to pre-populate new pages
 # with the contents of another page.
@@ -1491,6 +1523,20 @@ function PostRecentChanges($pagename,&$page,&$new) {
   }
 }
 
+function AutoCreateTargets($pagename, &$page, &$new) {
+  global $IsPagePosted, $AutoCreate, $LinkTargets;
+  if (!$IsPagePosted) return;
+  foreach((array)@$AutoCreate as $pat => $init) {
+    if (is_null($init)) continue;
+    foreach(preg_grep($pat, array_keys((array)@$LinkTargets)) as $aname) {
+      if (PageExists($aname)) continue;
+      $x = RetrieveAuthPage($aname, 'edit', false, READPAGE_CURRENT);
+      if (!$x) continue;
+      WritePage($aname, $init);
+    }
+  }
+}
+    
 function PreviewPage($pagename,&$page,&$new) {
   global $IsPageSaved, $FmtV;
   if (@$_POST['preview']) {
@@ -1507,7 +1553,6 @@ function HandleEdit($pagename, $auth = 'edit') {
   if (@$_POST['cancel']) 
     { Redirect(FmtPageName($EditRedirectFmt, $pagename)); return; }
   Lock(2);
-  $IsPagePosted = false;
   $page = RetrieveAuthPage($pagename, $auth, true);
   if (!$page) Abort("?cannot edit $pagename"); 
   PCache($pagename,$page);
@@ -1517,7 +1562,7 @@ function HandleEdit($pagename, $auth = 'edit') {
   $new['csum'] = $ChangeSummary;
   if ($ChangeSummary) $new["csum:$Now"] = $ChangeSummary;
   $EnablePost &= preg_grep('/^post/', array_keys(@$_POST));
-  foreach((array)$EditFunctions as $fn) $fn($pagename,$page,$new);
+  UpdatePage($pagename, $page, $new);
   Lock(0);
   if ($IsPagePosted && !@$_POST['postedit']) 
     { Redirect(FmtPageName($EditRedirectFmt, $pagename)); return; }
@@ -1587,13 +1632,13 @@ function PmWikiAuth($pagename, $level, $authprompt=true, $since=0) {
       $x = array(2, array(), '');
       $acache['@site'][$k] = IsAuthorized($v, 'site', $x);
       $AuthList["@_site_$k"] = $acache['@site'][$k][0] ? 1 : 0;
-      $acache[$gn][$k] = IsAuthorized($gp["passwd$k"], 'group', 
+      $acache[$gn][$k] = IsAuthorized(@$gp["passwd$k"], 'group', 
                                       $acache['@site'][$k]);
     }
   }
   foreach($DefaultPasswords as $k => $v) 
     list($page['=auth'][$k], $page['=passwd'][$k], $page['=pwsource'][$k]) =
-      IsAuthorized($page["passwd$k"], 'page', $acache[$gn][$k]);
+      IsAuthorized(@$page["passwd$k"], 'page', $acache[$gn][$k]);
   foreach($AuthCascade as $k => $t) {
     if ($page['=auth'][$k]+0 == 2) {
       $page['=auth'][$k] = $page['=auth'][$t];
@@ -1638,7 +1683,7 @@ function IsAuthorized($chal, $source, &$from) {
     $x = '';
     $pwchal = preg_split('/([, ]|\\w+:)/', $c, -1, PREG_SPLIT_DELIM_CAPTURE);
     foreach($pwchal as $pw) {
-      if ($pw == ',') continue;
+      if ($pw == ',' || $pw == '') continue;
       else if ($pw == ' ') { $x = ''; continue; }
       else if (substr($pw, -1, 1) == ':') { $x = $pw; continue; }
       else if ($pw{0} != '@' && $x > '') $pw = $x . $pw;
@@ -1677,7 +1722,7 @@ function SessionAuth($pagename, $auth = NULL) {
   $sid = session_id();
   @session_start();
   foreach((array)$auth as $k => $v)
-    if ($k) $_SESSION[$k] = (array)$v + (array)$_SESSION[$k];
+    if ($k) $_SESSION[$k] = (array)$v + (array)@$_SESSION[$k];
 
   if (!isset($AuthId)) $AuthId = @end($_SESSION['authid']);
   $AuthPw = array_keys((array)@$_SESSION['authpw']);

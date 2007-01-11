@@ -82,6 +82,7 @@ $WikiTitle = 'PmWiki';
 ##  or limiting specific WikiWords.
 # $WikiWordCount['PhD'] = 0;               # disables 'PhD'
 # $WikiWordCount['PmWiki'] = 1;            # convert only first 'PmWiki'
+# $WikiWordCount['WikiWord'] = -1;         # ignore $SpaceWikiWord setting
 
 ##  By default, PmWiki is configured such that only the first occurrence
 ##  of 'PmWiki' in a page is treated as a WikiWord.  If you want to 
@@ -121,6 +122,13 @@ $WikiTitle = 'PmWiki';
 ##  sets them out as relative to begin with.  (If you're starting a new
 ##  site, it's probably best to leave this setting alone.)
 $EnableRelativePageVars = 1;
+
+##  By default, pages in the Category group are manually created.
+##  Uncomment the following line to have blank category pages
+##  automatically created whenever a link to a non-existent
+##  category page is saved.  (The page is created only if
+##  the author has edit permissions to the Category group.)
+# $AutoCreate['/^Category\\./'] = array('ctime' => $Now);
 
 ##  PmWiki allows a great deal of flexibility for creating custom markup.
 ##  To add support for '*bold*' and '~italic~' markup (the single quotes

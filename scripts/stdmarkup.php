@@ -50,15 +50,15 @@ Markup('$[phrase]', '>[=',
 # {$var} substitutions
 Markup('{$var}', '>$[phrase]',
   '/\\{(\\*|!?[-\\w.\\/\\x80-\\xff]*)(\\$:?\\w+)\\}/e', 
-  "htmlspecialchars(PageVar(\$pagename, '$2', '$1'), ENT_NOQUOTES)");
+  "PVSE(PageVar(\$pagename, '$2', '$1'), ENT_NOQUOTES)");
 
 # invisible (:textvar:...:) definition
-Markup('textvar:', '>directives',
+Markup('textvar:', '<split',
   '/\\(:\\w[-\\w]*:(?!\\)).*?:\\)/s', '');
 
 ## patterns recognized as text vars
 SDVA($PageTextVarPatterns, array(
-  'var:' => '/^:*(\\w[-\\w]*):\\s?(.*)$/m',
+  'var:' => '/^:*(\\w[-\\w]*):[ \\t]?(.*)$/m',
   '(:var:...:)' => '/\\(:(\\w[-\\w]*):\\s?(.*?):\\)/s'));
 
 ## handle relative text vars in includes

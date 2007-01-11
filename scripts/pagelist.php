@@ -31,10 +31,11 @@ if (IsEnabled($EnablePageIndex, 1)) {
 }
 
 ## $SearchPatterns holds patterns for list= option
-SDVA($SearchPatterns['all'], array());
-$SearchPatterns['normal'][] = '!\.(All)?Recent(Changes|Uploads)$!';
-$SearchPatterns['normal'][] = '!\.Group(Print)?(Header|Footer|Attributes)$!';
-$SearchPatterns['normal'][] = str_replace('.', '\\.', "!^$pagename$!");
+SDV($SearchPatterns['all'], array());
+SDVA($SearchPatterns['normal'], array(
+  'recent' => '!\.(All)?Recent(Changes|Uploads)$!',
+  'group' => '!\.Group(Print)?(Header|Footer|Attributes)$!',
+  'self' => str_replace('.', '\\.', "!^$pagename$!")));
 
 ## $FPLFormatOpt is a list of options associated with fmt=
 ## values.  'default' is used for any undefined values of fmt=.
@@ -72,7 +73,7 @@ Markup('searchbox', 'directives',
 Markup('searchresults', 'directives',
   '/\\(:searchresults(\\s+.*?)?:\\)/ei',
   "FmtPageList(\$GLOBALS['SearchResultsFmt'], \$pagename, 
-       array('req' => 1, 'o' => PSS('$1')))");
+       array('req' => 1, 'request'=>1, 'o' => PSS('$1')))");
 
 SDV($SaveAttrPatterns['/\\(:(searchresults|pagelist)(\\s+.*?)?:\\)/i'], ' ');
 
@@ -114,7 +115,7 @@ function SearchBox($pagename, $opt) {
     class='inputbox searchbox' size='{$opt['size']}' /><input type='submit' 
     class='inputbutton searchbutton' value='{$opt['label']}' />";
   foreach($opt as $k => $v) {
-    if ($v == '') continue;
+    if ($v == '' || is_array($v)) continue;
     if ($k == 'q' || $k == 'label' || $k == 'value' || $k == 'size') continue;
     $k = str_replace("'", "&#039;", $k);
     $v = str_replace("'", "&#039;", $v);
@@ -138,9 +139,10 @@ function FmtPageList($outfmt, $pagename, $opt) {
     $opt['group'] = @$match[1];
     $rq = substr($rq, strlen(@$match[1])+1);
   }
+  $opt = array_merge($opt, ParseArgs($opt['o'], $PageListArgPattern));
   # merge markup options with form and url
-  $opt = array_merge($opt, ParseArgs($opt['o'].' '.$rq, $PageListArgPattern), 
-                     @$_REQUEST);
+  if (@$opt['request']) 
+    $opt = array_merge($opt, ParseArgs($rq, $PageListArgPattern), @$_REQUEST);
   # non-posted blank search requests return nothing
   if (@($opt['req'] && !$opt['-'] && !$opt[''] && !$opt['+'] && !$opt['q']))
     return '';
@@ -185,7 +187,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   asort($PageListFilters);
   $opt['=phase'] = PAGELIST_PRE; $list=array(); $pn=NULL; $page=NULL;
   foreach($PageListFilters as $fn => $v) {
-    $ret = $fn($list, $opt, $pn, $page);
+    $ret = $fn($list, $opt, $pagename, $page);
     if ($ret & PAGELIST_ITEM) $itemfilters[] = $fn;
     if ($ret & PAGELIST_POST) $postfilters[] = $fn;
   }
@@ -212,7 +214,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   StopWatch('MakePageList post');
   $opt['=phase'] = PAGELIST_POST; $pn=NULL; $page=NULL;
   foreach((array)$postfilters as $fn) 
-    $fn($list, $opt, $pn, $page);
+    $fn($list, $opt, $pagename, $page);
   
   if ($retpages) 
     for($i=0; $i<count($list); $i++)
@@ -222,7 +224,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
 }
 
 
-function PageListSources(&$list, &$opt, $pagename, &$page) {
+function PageListSources(&$list, &$opt, $pn, &$page) {
   global $SearchPatterns;
 
   StopWatch('PageListSources begin');
@@ -234,13 +236,13 @@ function PageListSources(&$list, &$opt, $pagename, &$page) {
   if (@$opt['name']) $opt['=pnfilter'][] = FixGlob($opt['name'], '$1*.$2');
 
   if (@$opt['trail']) {
-    $trail = ReadTrail($pagename, $opt['trail']);
+    $trail = ReadTrail($pn, $opt['trail']);
     $list = array();
     foreach($trail as $tstop) {
-      $pn = $tstop['pagename'];
-      $list[] = $pn;
+      $n = $tstop['pagename'];
+      $list[] = $n;
       $tstop['parentnames'] = array();
-      PCache($pn, $tstop);
+      PCache($n, $tstop);
     }
     foreach($trail as $tstop) 
       $PCache[$tstop['pagename']]['parentnames'][] = 
@@ -272,7 +274,7 @@ function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
         $opt['=exclp'][] = '$'.implode('|', array_map('preg_quote',$excl)).'$i';
 
       if (@$opt['link']) {
-        $link = MakePageName($pagename, $opt['link']);
+        $link = MakePageName($pn, $opt['link']);
         $opt['=linkp'] = "/(^|,)$link(,|$)/i";
         $indexterms[] = " $link ";
       }
@@ -439,7 +441,8 @@ function FPLTemplate($pagename, &$matches, $opt) {
                       '{$$GroupPageCount}' => &$grouppagecount);
 
   foreach(preg_grep('/^[\\w$]/', array_keys($opt)) as $k) 
-    $pseudovars["{\$\$$k}"] = $opt[$k];
+    if (!is_array($opt[$k]))
+      $pseudovars["{\$\$$k}"] = htmlspecialchars($opt[$k], ENT_NOQUOTES);
 
   $vk = array_keys($pseudovars);
   $vv = array_values($pseudovars);
@@ -457,7 +460,7 @@ function FPLTemplate($pagename, &$matches, $opt) {
 
     $item = str_replace($vk, $vv, MarkupEscape($ttext));
     $item = preg_replace('/\\{(=|&[lg]t;)(\\$:?\\w+)\\}/e',
-                "PageVar(\$pn, '$2', '$1')", $item);
+                "PVSE(PageVar(\$pn, '$2', '$1'))", $item);
     $out .= MarkupRestore($item);
     $lgroup = $group;
   }
