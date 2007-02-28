@@ -59,16 +59,38 @@ Markup('textvar:', '<split',
 ## patterns recognized as text vars
 SDVA($PageTextVarPatterns, array(
   'var:' => '/^:*(\\w[-\\w]*):[ \\t]?(.*)$/m',
-  '(:var:...:)' => '/\\(:(\\w[-\\w]*):\\s?(.*?):\\)/s'));
+  '(:var:...:)' => '/\\(:(\\w[-\\w]*):(?!\\))\\s?(.*?):\\)/s'));
 
 ## handle relative text vars in includes
 if (IsEnabled($EnableRelativePageVars, 0)) 
   SDV($QualifyPatterns["/\\{([-\\w\\x80-\\xfe]*)(\\$:?\\w+\\})/e"], 
     "'{' . ('$1' ? MakePageName(\$pagename, '$1') : \$pagename) . '$2'");
 
+
+## (:if:)/(:elseif:)/(:else:)
 Markup('if', 'fulltext',
-  "/\\(:(if[^\n]*?):\\)(.*?)(?=\\(:if[^\n]*?:\\)|$)/sei",
-  "CondText(\$pagename,PSS('$1'),PSS('$2'))");
+  "/ \\(:if (?:end)? \\b[^\n]*?:\\)
+     .*?
+     (?: \\(: (?:if|ifend) \\s* :\\)
+     |   (?=\\(:(?:if|ifend)\\b[^\n]*?:\\) | $)
+     )
+   /seix",
+  "CondText2(\$pagename, PSS('$0'))");
+
+function CondText2($pagename, $text) {
+  global $Conditions;
+  $parts = preg_split('/\\(:(ifend|if|else *if|else)\\b\\s*(!?)\\s*(\\S+)?\\s*(.*?)\\s*:\\)/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+  $x = array_shift($parts);
+  while ($parts) {
+    list($condstr, $not, $condname, $condparm, $condtext) =
+      array_splice($parts, 0, 5);
+    if (!isset($Conditions[$condname])) return $condtext;
+    $tf = @eval("return ({$Conditions[$condname]});");
+    if ($tf xor $not) return $condtext;
+  }
+  return '';
+}
+
 
 ## (:include:)
 Markup('include', '>if',
@@ -276,16 +298,14 @@ Markup('img','<urllink',
     \$GLOBALS['ImgTagFmt']),'L')");
 
 ## bare wikilinks
-Markup('wikilink', '>urllink',
-  "/\\b($GroupPattern([\\/.]))?($WikiWordPattern)/e",
-  "Keep('<span class=\\'wikiword\\'>'.WikiLink(\$pagename,'$0').'</span>',
-        'L')");
+##    v2.2: markup rule moved to scripts/wikiwords.php)
+Markup('wikilink', '>urllink');
 
-## escaped `WikiWords
+## escaped `WikiWords 
+##    v2.2: rule kept here for markup compatibility with 2.1 and earlier
 Markup('`wikiword', '<wikilink',
   "/`(($GroupPattern([\\/.]))?($WikiWordPattern))/e",
   "Keep('$1')");
-
 
 #### Block markups ####
 ## Completely blank lines don't do anything.
