@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2007 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -50,7 +50,7 @@ Markup('$[phrase]', '>[=',
 # {$var} substitutions
 Markup('{$var}', '>$[phrase]',
   '/\\{(\\*|!?[-\\w.\\/\\x80-\\xff]*)(\\$:?\\w+)\\}/e', 
-  "PVSE(PageVar(\$pagename, '$2', '$1'), ENT_NOQUOTES)");
+  "PRR(PVSE(PageVar(\$pagename, '$2', '$1')))");
 
 # invisible (:textvar:...:) definition
 Markup('textvar:', '<split',
@@ -58,13 +58,17 @@ Markup('textvar:', '<split',
 
 ## patterns recognized as text vars
 SDVA($PageTextVarPatterns, array(
-  'var:' => '/^:*(\\w[-\\w]*):[ \\t]?(.*)$/m',
-  '(:var:...:)' => '/\\(:(\\w[-\\w]*):(?!\\))\\s?(.*?):\\)/s'));
+  'var:' => '/^:*\\s*(\\w[-\\w]*)\\s*:[ \\t]?(.*)$/m',
+  '(:var:...:)' => '/\\(: *(\\w[-\\w]*) *:(?!\\))\\s?(.*?):\\)/s'));
 
 ## handle relative text vars in includes
 if (IsEnabled($EnableRelativePageVars, 0)) 
   SDV($QualifyPatterns["/\\{([-\\w\\x80-\\xfe]*)(\\$:?\\w+\\})/e"], 
     "'{' . ('$1' ? MakePageName(\$pagename, '$1') : \$pagename) . '$2'");
+
+## character entities
+Markup('&','<if','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
+  '&$1;');
 
 
 ## (:if:)/(:elseif:)/(:else:)
@@ -79,11 +83,13 @@ Markup('if', 'fulltext',
 
 function CondText2($pagename, $text) {
   global $Conditions;
-  $parts = preg_split('/\\(:(ifend|if|else *if|else)\\b\\s*(!?)\\s*(\\S+)?\\s*(.*?)\\s*:\\)/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+  $parts = preg_split('/\\(:(?:ifend|if|else *if|else)\\b\\s*(.*?)\\s*:\\)/', 
+                      $text, -1, PREG_SPLIT_DELIM_CAPTURE);
   $x = array_shift($parts);
   while ($parts) {
-    list($condstr, $not, $condname, $condparm, $condtext) =
-      array_splice($parts, 0, 5);
+    list($condspec, $condtext) = array_splice($parts, 0, 2);
+    if (!preg_match("/^\\s*(!?)\\s*(\\S*)\\s*(.*?)\\s*$/", $condspec, $match)) continue;
+    list($x, $not, $condname, $condparm) = $match;
     if (!isset($Conditions[$condname])) return $condtext;
     $tf = @eval("return ({$Conditions[$condname]});");
     if ($tf xor $not) return $condtext;
@@ -173,21 +179,17 @@ Markup('messages', 'directives',
 ## (:comment:)
 Markup('comment', 'directives', '/\\(:comment .*?:\\)/i', '');
 
-## character entities
-Markup('&','directives','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
-  '&$1;');
-
 ## (:title:)
-Markup('title','>&',
+Markup('title','directives',
   '/\\(:title\\s(.*?):\\)/ei',
   "PZZ(PCache(\$pagename, 
          \$zz=array('title' => SetProperty(\$pagename, 'title', PSS('$1')))))");
 
 ## (:keywords:), (:description:)
-Markup('keywords', '>&', 
+Markup('keywords', 'directives', 
   "/\\(:keywords?\\s+(.+?):\\)/ei",
   "PZZ(SetProperty(\$pagename, 'keywords', PSS('$1'), ', '))");
-Markup('description', '>&',
+Markup('description', 'directives',
   "/\\(:description\\s+(.+?):\\)/ei",
   "PZZ(SetProperty(\$pagename, 'description', PSS('$1'), '\n'))");
 $HTMLHeaderFmt['meta'] = 'function:PrintMetaTags';
@@ -328,7 +330,7 @@ Markup('^img', 'block',
 
 ## Whitespace at the beginning of lines can be used to maintain the
 ## indent level of a previous list item, or a preformatted text block.
-Markup('^ws', '<^img', '/^(\\s+)/e', "WSIndent('$1')");
+Markup('^ws', '<^img', '/^\\s+ #1/ex', "WSIndent('$0')");
 function WSIndent($i) {
   global $MarkupFrame;
   $icol = strlen($i);
@@ -338,12 +340,16 @@ function WSIndent($i) {
       $MarkupFrame[0]['icol'] = $icol;
       return '';
     }
-  return "<:pre,1>$i";
+  return $i;
 }
 
-## If the ^ws rule is disabled, then leading whitespace is a
-## preformatted text block.
-Markup('^ ','block','/^(\\s)/','<:pre,1>$1');
+## The $EnableWSPre setting uses leading spaces on markup lines to indicate
+## blocks of preformatted text.
+SDV($EnableWSPre, 1);
+Markup('^ ', 'block', 
+  '/^\\s+ #2/ex',
+  "(\$GLOBALS['EnableWSPre'] > 0 && strlen('$0') >= \$GLOBALS['EnableWSPre']) 
+     ? '<:pre,1>$0' : '$0'");
 
 ## bullet lists
 Markup('^*','block','/^(\\*+)\\s?(\\s*)/','<:ul,$1,$0>$2');

@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2002-2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2002-2007 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -54,6 +54,9 @@ if (IsEnabled($EnableWikiTrails,1))
   include_once("$FarmD/scripts/trails.php");
 if (IsEnabled($EnableWikiStyles,1))
   include_once("$FarmD/scripts/wikistyles.php");
+if (IsEnabled($EnableMarkupExpressions, 1) 
+    && !function_exists('MarkupExpression'))
+  include_once("$FarmD/scripts/markupexpr.php");
 if (IsEnabled($EnableMailPosts,0))
   include_once("$FarmD/scripts/mailposts.php");
 if (IsEnabled($EnablePageList,1))

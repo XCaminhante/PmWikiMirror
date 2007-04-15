@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2007 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -30,6 +30,8 @@ if (IsEnabled($EnablePageIndex, 1)) {
   $EditFunctions[] = 'PostPageIndex';
 }
 
+SDV($StrFoldFunction, 'strtolower');
+
 ## $SearchPatterns holds patterns for list= option
 SDV($SearchPatterns['all'], array());
 SDVA($SearchPatterns['normal'], array(
@@ -40,8 +42,7 @@ SDVA($SearchPatterns['normal'], array(
 ## $FPLFormatOpt is a list of options associated with fmt=
 ## values.  'default' is used for any undefined values of fmt=.
 SDVA($FPLFormatOpt, array(
-  'default' => array('fn' => 'FPLTemplate', 'fmt' => '#default', 
-                     'class' => 'fpltemplate'),
+  'default' => array('fn' => 'FPLTemplate', 'fmt' => '#default'),
   'bygroup' => array('fn' => 'FPLTemplate', 'template' => '#bygroup',
                      'class' => 'fplbygroup'),
   'simple'  => array('fn' => 'FPLTemplate', 'template' => '#simple',
@@ -92,6 +93,8 @@ SDVA($PageListFilters, array(
 
 foreach(array('random', 'size', 'time', 'ctime') as $o) 
   SDV($PageListSortCmp[$o], "@(\$PCache[\$x]['$o']-\$PCache[\$y]['$o'])");
+SDV($PageListSortCmp['title'], 
+  '@strcasecmp($PCache[$x][\'=title\'], $PCache[$y][\'=title\'])');
 
 define('PAGELIST_PRE' , 1);
 define('PAGELIST_ITEM', 2);
@@ -284,14 +287,15 @@ function PageListSources(&$list, &$opt, $pn, &$page) {
 
 function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
   global $FmtV;
+  $fold = $GLOBALS['StrFoldFunction'];
 
   switch ($opt['=phase']) {
     case PAGELIST_PRE:
       $FmtV['$MatchSearched'] = count($list);
       $incl = array(); $excl = array();
-      foreach((array)@$opt[''] as $i) { $incl[] = $i; }
-      foreach((array)@$opt['+'] as $i) { $incl[] = $i; }
-      foreach((array)@$opt['-'] as $i) { $excl[] = $i; }
+      foreach((array)@$opt[''] as $i) { $incl[] = $fold($i); }
+      foreach((array)@$opt['+'] as $i) { $incl[] = $fold($i); }
+      foreach((array)@$opt['-'] as $i) { $excl[] = $fold($i); }
 
       $indexterms = PageIndexTerms($incl);
       foreach($incl as $i) {
@@ -325,7 +329,7 @@ function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
       if (@$opt['=linkp'] && !preg_match($opt['=linkp'], @$page['targets'])) 
         { $opt['=reindex'][] = $pn; return 0; }
       if (@$opt['=inclp'] || @$opt['=exclp']) {
-        $text = $pn."\n".@$page['targets']."\n".@$page['text'];
+        $text = $fold($pn."\n".@$page['targets']."\n".@$page['text']);
         foreach((array)@$opt['=exclp'] as $i) 
           if (preg_match($i, $text)) return 0;
         foreach((array)@$opt['=inclp'] as $i) 
@@ -350,16 +354,19 @@ function PageListVariables(&$list, &$opt, $pn, &$page) {
       $varlist = preg_grep('/^\\$/', array_keys($opt));
       if (!$varlist) return 0;
       foreach($varlist as $v) {
-        $pat = preg_quote($opt[$v], '/');
-        $pat = str_replace(array('\\*', '\\?', '\\[\\^', '\\[', '\\]', ','),
-                           array('.*', '.', '[^', '[', ']', '|'), $pat);
-        $opt['=varinclp'][$v] = "/^(?:$pat)$/i";
+        list($inclp, $exclp) = GlobToPCRE($opt[$v]);
+        if ($inclp) $opt['=varinclp'][$v] = "/$inclp/i";
+        if ($exclp) $opt['=varexclp'][$v] = "/$exclp/i";
       }
       return PAGELIST_ITEM;
 
     case PAGELIST_ITEM:
-      foreach($opt['=varinclp'] as $v => $pat) 
-        if (!preg_match($pat, PageVar($pn, $v))) return 0;
+      if (@$opt['=varinclp'])
+        foreach($opt['=varinclp'] as $v => $pat) 
+          if (!preg_match($pat, PageVar($pn, $v))) return 0;
+      if (@$opt['=varexclp'])
+        foreach($opt['=varexclp'] as $v => $pat) 
+           if (preg_match($pat, PageVar($pn, $v))) return 0;
       return 1;
   }
 }        
@@ -394,9 +401,7 @@ function PageListSort(&$list, &$opt, $pn, &$page) {
   StopWatch('PageListSort begin');
   $order = $opt['=order'];
   if ($order['title'])
-    foreach($list as $pn) 
-      if (!isset($PCache[$pn]['title'])) 
-        $PCache[$pn]['title'] = PageVar($pn, '$Title');
+    foreach($list as $pn) $PCache[$pn]['=title'] = PageVar($pn, '$Title');
   if ($order['group'])
     foreach($list as $pn) $PCache[$pn]['group'] = PageVar($pn, '$Group');
   if ($order['random'])
@@ -481,10 +486,29 @@ function HandleSearchA($pagename, $level = 'read') {
 ## $FPLFormatOpt hash.
 ########################################################################
 
+## This helper function handles the count= parameter for extracting
+## a range of pagelist in the list.
+function CalcRange($range, $n) {
+  if ($n < 1) return array(0, 0);
+  if (strpos($range, '..') === false) {
+    if ($range > 0) return array(1, min($range, $n));
+    if ($range < 0) return array(max($n + $range + 1, 1), $n);
+    return array(1, $n);
+  }
+  list($r0, $r1) = explode('..', $range);
+  if ($r0 < 0) $r0 += $n + 1;
+  if ($r1 < 0) $r1 += $n + 1;
+  else if ($r1 == 0) $r1 = $n;
+  if ($r0 < 1 && $r1 < 1) return array($n+1, $n+1);
+  return array(max($r0, 1), max($r1, 1));
+}
+
+
+##  FPLTemplate handles PagelistTemplates
 function FPLTemplate($pagename, &$matches, $opt) {
-  global $Cursor, $FPLFormatOpt, $FPLTemplatePageFmt;
+  global $Cursor, $FPLTemplatePageFmt, $PageListArgPattern;
   SDV($FPLTemplatePageFmt, array('{$FullName}',
-    '{$SiteGroup}.LocalTemplates','{$SiteGroup}.PageListTemplates'));
+    '{$SiteGroup}.LocalTemplates', '{$SiteGroup}.PageListTemplates'));
 
   StopWatch("FPLTemplate begin");
   $template = @$opt['template'];
@@ -501,13 +525,36 @@ function FPLTemplate($pagename, &$matches, $opt) {
     if (!$qf || strpos($ttext, "[[#$qf]]") !== false) break;
   }
 
-  ##   remove any anchor markups to avoid duplications
-  $ttext = preg_replace('/\\[\\[#[A-Za-z][-.:\\w]*\\]\\]/', '', $ttext);
-  ##   save any escapes
+  ##  save any escapes
   $ttext = MarkupEscape($ttext);
+  ##  remove any anchor markups to avoid duplications
+  $ttext = preg_replace('/\\[\\[#[A-Za-z][-.:\\w]*\\]\\]/', '', $ttext);
+  
+  ##  extract portions of template
+  $tparts = preg_split('/\\(:(template)\\s+(\\w+)\\s*(.*?):\\)/i', $ttext, -1,
+                       PREG_SPLIT_DELIM_CAPTURE);
 
+  ##  handle (:template defaults:)
+  $i = 0;
+  while ($i < count($tparts)) {
+    if ($tparts[$i] != 'template') { $i++; continue; }
+    if ($tparts[$i+1] != 'defaults') { $i+=4; continue; }
+    $opt = array_merge(ParseArgs($tparts[$i+2], $PageListArgPattern), $opt);
+    array_splice($tparts, $i, 3);
+  }
+
+  SDV($opt['class'], 'fpltemplate');
+
+  ##  get the list of pages
   $matches = array_values(MakePageList($pagename, $opt, 0));
-  if (@$opt['count']) array_splice($matches, $opt['count']);
+  ##  extract page subset according to 'count=' parameter
+  if (@$opt['count']) {
+    list($r0, $r1) = CalcRange($opt['count'], count($matches));
+    if ($r1 < $r0) 
+      $matches = array_reverse(array_slice($matches, $r1-1, $r0-$r1+1));
+    else 
+      $matches = array_slice($matches, $r0-1, $r1-$r0+1);
+  }
 
   $savecursor = $Cursor;
   $pagecount = 0; $groupcount = 0; $grouppagecount = 0;
@@ -524,24 +571,55 @@ function FPLTemplate($pagename, &$matches, $opt) {
 
   $lgroup = ''; $out = '';
   foreach($matches as $i => $pn) {
-    $prev = (string)@$matches[$i-1];
-    $next = (string)@$matches[$i+1];
-    $Cursor['<'] = $Cursor['&lt;'] = $prev;
-    $Cursor['='] = $pn;
-    $Cursor['>'] = $Cursor['&gt;'] = $next;
     $group = PageVar($pn, '$Group');
-    if ($group != $lgroup) { $groupcount++; $grouppagecount = 0; }
+    if ($group != $lgroup) { $groupcount++; $grouppagecount = 0; $lgroup = $group; }
     $grouppagecount++; $pagecount++;
 
-    $item = str_replace($vk, $vv, $ttext);
-    $item = preg_replace('/\\{(=|&[lg]t;)(\\$:?\\w+)\\}/e',
-                "PVSE(PageVar(\$pn, '$2', '$1'))", $item);
-    $out .= MarkupRestore($item);
-    $lgroup = $group;
+    $t = 0;
+    while ($t < count($tparts)) {
+      if ($tparts[$t] != 'template') { $item = $tparts[$t]; $t++; }
+      else {
+        list($when, $control, $item) = array_slice($tparts, $t+1, 3); $t+=4;
+        if (!$control) {
+          if ($when == 'first' && $i != 0) continue;
+          if ($when == 'last' && $i != count($matches) - 1) continue;
+        } else {
+          if ($when == 'first' || !isset($last[$t])) {
+            $Cursor['<'] = $Cursor['&lt;'] = (string)@$matches[$i-1];
+            $Cursor['='] = $pn;
+            $Cursor['>'] = $Cursor['&gt;'] = (string)@$matches[$i+1];
+            $curr = str_replace($vk, $vv, $control);
+            $curr = preg_replace('/\\{(=|&[lg]t;)(\\$:?\\w+)\\}/e',
+                        "PageVar(\$pn, '$2', '$1')", $curr);
+            if ($when == 'first' && $i > 0 && $last[$t] == $curr) continue;
+            $last[$t] = $curr;
+          }
+          if ($when == 'last') {
+            $Cursor['<'] = $Cursor['&lt;'] = $pn;
+            $Cursor['='] = (string)@$matches[$i+1];
+            $Cursor['>'] = $Cursor['&gt;'] = (string)@$matches[$i+2];
+            $next = str_replace($vk, $vv, $control);
+            $next = preg_replace('/\\{(=|&[lg]t;)(\\$:?\\w+)\\}/e',
+                        "PageVar(\$pn, '$2', '$1')", $next);
+            if ($next == $last[$t] && $i != count($matches) - 1) continue;
+            $last[$t] = $next;
+          }
+        }
+      }
+      $Cursor['<'] = $Cursor['&lt;'] = (string)@$matches[$i-1];
+      $Cursor['='] = $pn;
+      $Cursor['>'] = $Cursor['&gt;'] = (string)@$matches[$i+1];
+      $item = str_replace($vk, $vv, $item);
+      $item = preg_replace('/\\{(=|&[lg]t;)(\\$:?\\w+)\\}/e',
+                  "PVSE(PageVar(\$pn, '$2', '$1'))", $item);
+      $out .= MarkupRestore($item);
+    }
   }
+
   $class = preg_replace('/[^-a-zA-Z0-9\\x80-\\xff]/', ' ', @$opt['class']);
   $div = ($class) ? "<div class='$class'>" : '<div>';
   $out = $div.MarkupToHTML($pagename, $out, array('escape' => 0)).'</div>';
+  $Cursor = $savecursor;
   StopWatch("FPLTemplate end");
   return $out;
 }
@@ -556,10 +634,11 @@ function FPLTemplate($pagename, &$matches, $opt) {
 ## normalized list of associated search terms.  This reduces the
 ## size of the index and speeds up searches.
 function PageIndexTerms($terms) {
+  global $StrFoldFunction;
   $w = array();
   foreach((array)$terms as $t) {
     $w = array_merge($w, preg_split('/[^\\w\\x80-\\xff]+/', 
-                                    strtolower($t), -1, PREG_SPLIT_NO_EMPTY));
+           $StrFoldFunction($t), -1, PREG_SPLIT_NO_EMPTY));
   }
  return $w;
 }

@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2005-2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2005-2007 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -13,6 +13,10 @@
     is relying on an outdated feature or way of doing things.
 
     Transitions defined in this script:
+
+      $Transition['wspre']              - leading spaces are pre text
+
+      $Transition['version'] < 2001941  - all transitions listed above
 
       $Transition['wikiwords']          - 2.1-style WikiWord processing
 
@@ -57,6 +61,12 @@
 
 ## if ?trans=0 is specified, then we don't do any fixups.
 if (@$_REQUEST['trans']==='0') return;
+
+## Transitions from 2.2.0-beta41
+if (@$Transition['version'] < 2001941)
+  SDVA($Transition, array('wspre' => 1));
+
+if (@$Transition['wspre']) SDV($EnableWSPre, 1);
 
 ## Transitions from 2.2.0-beta24
 if (@$Transition['version'] < 2001924)

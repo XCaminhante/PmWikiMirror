@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2006 Patrick R. Michaud
+    Copyright 2001-2007 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -63,7 +63,8 @@ $EditFunctions = array('EditTemplate', 'RestorePage', 'ReplaceOnSave',
   'SaveAttributes', 'PostPage', 'PostRecentChanges', 'AutoCreateTargets',
   'PreviewPage');
 $EnablePost = 1;
-$ChangeSummary = substr(stripmagic(@$_REQUEST['csum']), 0, 100);
+$ChangeSummary = substr(preg_replace('/[\\x00-\\x1f]|=\\]/', '', 
+                                     stripmagic(@$_REQUEST['csum'])), 0, 100);
 $AsSpacedFunction = 'AsSpaced';
 $SpaceWikiWords = 0;
 $RCDelimPattern = '  ';
@@ -476,7 +477,31 @@ function fixperms($fname, $add = 0) {
     @chmod($fname,fileperms($fname)|$bp);
 }
 
-## MatchPageNames
+## GlobToPCRE converts wildcard patterns into pcre patterns for
+## inclusion and exclusion.  Wildcards beginning with '-' or '!'
+## are treated as things to be excluded.
+function GlobToPCRE($pat) {
+  $pat = preg_quote($pat, '/');
+  $pat = str_replace(array('\\*', '\\?', '\\[', '\\]', '\\^'),
+                     array('.*',  '.',   '[',   ']',   '^'), $pat);
+  $excl = array(); $incl = array();
+  foreach(preg_split('/,+\s?/', $pat, -1, PREG_SPLIT_NO_EMPTY) as $p) {
+    if ($p{0} == '-' || $p{0} == '!') $excl[] = '^'.substr($p, 1).'$';
+    else $incl[] = "^$p$";
+  }
+  return array(implode('|', $incl), implode('|', $excl));
+}
+
+## FixGlob changes wildcard patterns without '.' to things like
+## '*.foo' (name matches) or 'foo.*' (group matches).
+function FixGlob($x, $rep = '$1*.$2') {
+  return preg_replace('/([\\s,][-!]?)([^.\\s,]+)(?=[\\s,])/', $rep, ",$x,");
+}
+
+## MatchPageNames reduces $pagelist to those pages with names
+## matching the pattern(s) in $pat.  Patterns can be either
+## regexes to include ('/'), regexes to exclude ('!'), or
+## wildcard patterns (all others).
 function MatchPageNames($pagelist, $pat) {
   $pagelist = (array)$pagelist;
   foreach((array)$pat as $p) {
@@ -490,25 +515,14 @@ function MatchPageNames($pagelist, $pat) {
         $pagelist = array_diff($pagelist, preg_grep($p, $pagelist)); 
         continue;
       default:
-        $p = preg_quote($p, '/');
-        $p = str_replace(array('/', '\\*', '\\?', '\\[', '\\]', '\\^'),
-                         array('.', '.*', '.', '[', ']', '^'), $p);
-        $excl = array(); $incl = array();
-        foreach(preg_split('/[\\s,]+/', $p, -1, PREG_SPLIT_NO_EMPTY) as $q) {
-          if ($q{0} == '-' || $q{0} == '!') $excl[] = '^'.substr($q, 1).'$';
-          else $incl[] = "^$q$";
-        }
-        if ($excl) 
-          $pagelist = array_diff($pagelist, 
-                          preg_grep('/' . join('|', $excl) . '/i', $pagelist));
-        if ($incl)
-          $pagelist = preg_grep('/' . join('|', $incl) . '/i', $pagelist);
+        list($inclp, $exclp) = GlobToPCRE(str_replace('/', '.', $p));
+        if ($exclp) 
+          $pagelist = array_diff($pagelist, preg_grep("/$exclp/i", $pagelist));
+        if ($inclp)
+          $pagelist = preg_grep("/$inclp/i", $pagelist);
     }
   }
   return $pagelist;
-}
-function FixGlob($x, $rep = '$1*.$2') {
-  return preg_replace('/([\\s,][-!]?)([^.\\s,]+)(?=[\\s,])/', $rep, " $x ");
 }
   
 ## ResolvePageName "normalizes" a pagename based on the current
@@ -1479,16 +1493,17 @@ function SaveAttributes($pagename,&$page,&$new) {
 
 function PostPage($pagename, &$page, &$new) {
   global $DiffKeepDays, $DiffFunction, $DeleteKeyPattern, $EnablePost,
-    $Now, $Author, $WikiDir, $IsPagePosted;
+    $Now, $Charset, $Author, $WikiDir, $IsPagePosted;
   SDV($DiffKeepDays,3650);
   SDV($DeleteKeyPattern,"^\\s*delete\\s*$");
   $IsPagePosted = false;
   if ($EnablePost) {
-    $new["author"]=@$Author;
+    $new['charset'] = $Charset;
+    $new['author'] = @$Author;
     $new["author:$Now"] = @$Author;
     $new["host:$Now"] = $_SERVER['REMOTE_ADDR'];
     $diffclass = preg_replace('/\\W/','',@$_POST['diffclass']);
-    if ($page["time"]>0 && function_exists(@$DiffFunction)) 
+    if ($page['time']>0 && function_exists(@$DiffFunction)) 
       $new["diff:$Now:{$page['time']}:$diffclass"] =
         $DiffFunction($new['text'],@$page['text']);
     $keepgmt = $Now-$DiffKeepDays * 86400;

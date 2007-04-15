@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2006-2007 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -209,8 +209,10 @@ function BlocklistDownload($pagename, $dir = '') {
 
   ##  if we didn't get it, and we don't already have text, save a
   ##  note in the page so we know what happened
-  if (!$blocklistdata && !@$page['text']) 
-    $blocklistdata = '#### Unable to download blocklist';
+  if (!$blocklistdata && !@$page['text']) {
+    $auf = ini_get('allow_url_fopen');
+    $blocklistdata = "#### Unable to download blocklist (allow_url_fopen=$auf)";
+  }
 
   ##  if we have some new text to save, let's format it and save it
   if ($blocklistdata) {
