@@ -56,11 +56,6 @@ Markup('{$var}', '>$[phrase]',
 Markup('textvar:', '<split',
   '/\\(:\\w[-\\w]*:(?!\\)).*?:\\)/s', '');
 
-## patterns recognized as text vars
-SDVA($PageTextVarPatterns, array(
-  'var:' => '/^:*\\s*(\\w[-\\w]*)\\s*:[ \\t]?(.*)$/m',
-  '(:var:...:)' => '/\\(: *(\\w[-\\w]*) *:(?!\\))\\s?(.*?):\\)/s'));
-
 ## handle relative text vars in includes
 if (IsEnabled($EnableRelativePageVars, 0)) 
   SDV($QualifyPatterns["/\\{([-\\w\\x80-\\xfe]*)(\\$:?\\w+\\})/e"], 
@@ -101,7 +96,7 @@ function CondText2($pagename, $text) {
 ## (:include:)
 Markup('include', '>if',
   '/\\(:include\\s+(\\S.*?):\\)/ei',
-  "PRR(IncludeText(\$pagename, '$1'))");
+  "PRR(IncludeText(\$pagename, PSS('$1')))");
 
 ## (:redirect:)
 Markup('redirect', '<include',
@@ -439,7 +434,7 @@ function MarkupMarkup($pagename, $text, $opt = '') {
     { $sep = ''; $pretext = wordwrap($text, 40); } 
   else 
     { $sep = '</tr><tr>'; $pretext = wordwrap($text, 75); }
-  return Keep("<table class='markup $class' align='center'>$caption
+  return Keep(@"<table class='markup $class' align='center'>$caption
       <tr><td class='markup1' valign='top'><pre>$pretext</pre></td>$sep<td 
         class='markup2' valign='top'>$html</td></tr></table>");
 }
@@ -467,25 +462,22 @@ $Conditions['date'] = "CondDate(\$condparm)";
 
 function CondDate($condparm) {
   global $Now;
-  NoCache();
-  if (!preg_match('/^(.*?)(\\.\\.(.*))?$/', $condparm, $match)) return false;
-  if ($match[2]) {
-    $t0 = $match[1];  if ($t0 == '') $t0 = '19700101';
-    $t1 = $match[3];  if ($t1 == '') $t1 = '20380101';
-  } else $t0 = $t1 = $match[1];
-  $t0 = preg_replace('/\\D/', '', $t0);
-  if (!preg_match('/^(\\d{4})(\\d\\d)(\\d\\d)$/', $t0, $m)) return false;
-  $g0 = mktime(0, 0, 0, $m[2], $m[3], $m[1]);
-  if ($Now < $g0) return false;
-
-  $t1 = preg_replace('/\\D/', '', $t1);
-  $t1++;
-  if (!preg_match('/^(\\d{4})(\\d\\d)(\\d\\d)$/', $t1, $m)) return false;
-  $g1 = mktime(0, 0, 0, $m[2], $m[3], $m[1]);
-  if ($Now >= $g1) return false;
+  if (!preg_match('/^(\\S*?)(\\.\\.(\\S*))?(\\s+\\S.*)?$/',
+                  trim($condparm), $match))
+    return false;
+  if ($match[4] == '') { $x0 = $Now; NoCache(); }
+  else { list($x0, $x1) = DRange($match[4]); }
+  if ($match[1] > '') {
+    list($t0, $t1) = DRange($match[1]);
+    if ($x0 < $t0) return false;
+    if ($match[2] == '' && $x0 >= $t1) return false;
+  }
+  if ($match[3]) {
+    list($t0, $t1) = Drange($match[3]);
+    if ($x0 >= $t1) return false;
+  }
   return true;
 }
-
 
 # This pattern enables the (:encrypt <phrase>:) markup/replace-on-save
 # pattern.
