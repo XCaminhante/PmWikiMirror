@@ -259,7 +259,7 @@ Markup('[[->','>[[|',
   "Keep(MakeLink(\$pagename,PSS('$2'),PSS('$1'),'$3'),'L')");
 
 if (IsEnabled($EnableRelativePageLinks, 1))
-  SDV($QualifyPatterns['/(\\[\\[(?>[^\\]]+?->)?\\s*)([-\\w\\s\']+([|#?].*?)?\\]\\])/e'], "PSS('$1').\$group.PSS('/$2')");
+  SDV($QualifyPatterns['/(\\[\\[(?>[^\\]]+?->)?\\s*)([-\\w\\s\'()]+([|#?].*?)?\\]\\])/e'], "PSS('$1').\$group.PSS('/$2')");
 
 ## [[#anchor]]
 Markup('[[#','<[[','/(?>\\[\\[#([A-Za-z][-.:\\w]*))\\]\\]/e',
@@ -454,6 +454,10 @@ SDV($HTMLStylesFmt['markup'], "
   table.markup caption { text-align:left; }
   div.faq p, div.faq pre { margin-left:2em; }
   div.faq p.question { margin:1em 0 0.75em 0; font-weight:bold; }
+  div.faqtoc div.faq * { display:none; }
+  div.faqtoc div.faq p.question 
+    { display:block; font-weight:normal; margin:0.5em 0 0.5em 20px; line-height:normal; }
+  div.faqtoc div.faq p.question * { display:inline; }
   ");
 
 #### Special conditions ####

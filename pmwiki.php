@@ -100,6 +100,7 @@ $UrlLinkFmt =
 umask(002);
 $CookiePrefix = '';
 $SiteGroup = 'Site';
+$SiteAdminGroup = 'SiteAdmin';
 $DefaultGroup = 'Main';
 $DefaultName = 'HomePage';
 $GroupHeaderFmt = '(:include {$Group}.GroupHeader self=0 basepage={*$FullName}:)(:nl:)';
@@ -466,7 +467,7 @@ function DRange($when) {
 ## of that string.  (It can be overridden via $AsSpacedFunction.)
 function AsSpaced($text) {
   $text = preg_replace("/([[:lower:]\\d])([[:upper:]])/", '$1 $2', $text);
-  $text = preg_replace('/(?<![-\\d])(\\d+( |$))/',' $1',$text);
+  $text = preg_replace('/([^-\\d])(\\d[-\\d]*( |$))/','$1 $2',$text);
   return preg_replace("/([[:upper:]])([[:upper:]][[:lower:]\\d])/",
     '$1 $2', $text);
 }
@@ -554,7 +555,7 @@ function GlobToPCRE($pat) {
 ## FixGlob changes wildcard patterns without '.' to things like
 ## '*.foo' (name matches) or 'foo.*' (group matches).
 function FixGlob($x, $rep = '$1*.$2') {
-  return preg_replace('/([\\s,][-!]?)([^.\\s,]+)(?=[\\s,])/', $rep, ",$x,");
+  return preg_replace('/([\\s,][-!]?)([^\\/.\\s,]+)(?=[\\s,])/', $rep, ",$x,");
 }
 
 ## MatchPageNames reduces $pagelist to those pages with names
@@ -699,8 +700,10 @@ function PageTextVar($pagename, $var) {
     if ($page) {
       foreach((array)$PageTextVarPatterns as $pat) 
         if (preg_match_all($pat, @$page['text'], $match, PREG_SET_ORDER))
-          foreach($match as $m)  
-            $pc["=p_{$m[2]}"] = Qualify($pagename, $m[3]);
+          foreach($match as $m) {
+            $t = preg_replace("/\\{\\$:{$m[2]}\\}/", '', $m[3]);
+            $pc["=p_{$m[2]}"] = Qualify($pagename, $t);
+          }
     }
   }
   return @$PCache[$pagename]["=p_$var"];
@@ -1017,12 +1020,11 @@ function Abort($msg, $info='') {
   exit;
 }
 
-function Redirect($pagename,$urlfmt='$PageUrl') {
+function Redirect($pagename, $urlfmt='$PageUrl') {
   # redirect the browser to $pagename
-  global $EnableRedirect,$RedirectDelay;
-  SDV($RedirectDelay,0);
+  global $EnableRedirect, $RedirectDelay, $EnableStopWatch;
+  SDV($RedirectDelay, 0);
   clearstatcache();
-  #if (!PageExists($pagename)) $pagename=$DefaultPage;
   $pageurl = FmtPageName($urlfmt,$pagename);
   if (IsEnabled($EnableRedirect,1) && 
       (!isset($_REQUEST['redirect']) || $_REQUEST['redirect'])) {
@@ -1031,7 +1033,11 @@ function Redirect($pagename,$urlfmt='$PageUrl') {
     echo "<html><head>
       <meta http-equiv='Refresh' Content='$RedirectDelay; URL=$pageurl' />
      <title>Redirect</title></head><body></body></html>";
-  } else echo "<a href='$pageurl'>Redirect to $pageurl</a>";
+     exit;
+  }
+  echo "<a href='$pageurl'>Redirect to $pageurl</a>";
+  if (@$EnableStopWatch && function_exists('StopWatchHTML'))
+    StopWatchHTML($pagename, 1);
   exit;
 }
 
@@ -1145,9 +1151,11 @@ function TextSection($text, $sections, $args = NULL) {
   @list($x, $aa, $dots, $b, $bb) = $match;
   if (!$dots && !$b) $bb = $npat;
   if ($aa) {
-    if (strpos($text, "[[#$aa]]") === false) return false;
-    $rep = (@$args['anchors']) ? '$1' : '';
-    $text = preg_replace("/^.*?\n([^\n]*\\[\\[#$aa\\]\\])/s", $rep, $text, 1);
+    $pos = strpos($text, "[[#$aa]]");  if ($pos === false) return false;
+    if (@$args['anchors']) 
+      while ($pos > 0 && $text[$pos-1] != "\n") $pos--;
+    else $pos += strlen("[[#$aa]]");
+    $text = substr($text, $pos);
   }
   if ($bb)
     $text = preg_replace("/(\n)[^\n]*\\[\\[#$bb\\]\\].*$/s", '$1', $text, 1);
@@ -1159,11 +1167,10 @@ function TextSection($text, $sections, $args = NULL) {
 ##  If $pagesection starts with anything other than '#', it identifies
 ##  the page to extract text from.  Otherwise RetrieveAuthSection looks
 ##  in the pages given by $list, or in $pagename if $list is not specified.
-##  Any page variables in the text are pagename-qualified.
-##                    WARNING WARNING WARNING
-##  The return values of this function are likely to change, so don't
-##  rely on it just yet.
+##  The selected page is placed in the global $RASPageName variable.
+##  The caller is responsible for calling Qualify() as needed.
 function RetrieveAuthSection($pagename, $pagesection, $list=NULL, $auth='read') {
+  global $RASPageName;
   if ($pagesection{0} != '#')
     $list = array(MakePageName($pagename, $pagesection));
   else if (is_null($list)) $list = array($pagename);
@@ -1173,8 +1180,9 @@ function RetrieveAuthSection($pagename, $pagesection, $list=NULL, $auth='read') 
     $tpage = RetrieveAuthPage($t, $auth, false, READPAGE_CURRENT);
     if (!$tpage) continue;
     $text = TextSection($tpage['text'], $pagesection);
-    if ($text !== false) return Qualify($t, $text);
+    if ($text !== false) { $RASPageName = $t; return $text; }
   }
+  $RASPageName = '';
   return false;
 }
 
@@ -1235,7 +1243,7 @@ function RedirectMarkup($pagename, $opt) {
     return '';
   if (preg_match('/^30[1237]$/', @$opt['status'])) 
      header("HTTP/1.1 {$opt['status']}");
-  Redirect($to, "{\$PageUrl}?from=$pagename$anchor");
+  Redirect($to, @"{\$PageUrl}?from=$pagename$anchor");
   exit();
 }
    
@@ -1528,9 +1536,14 @@ function HandleBrowse($pagename, $auth = 'read') {
 ## an optional list of functions to use instead of $EditFunctions.
 function UpdatePage(&$pagename, &$page, &$new, $fnlist = NULL) {
   global $EditFunctions, $IsPagePosted;
+  StopWatch("UpdatePage: begin $pagename");
   if (is_null($fnlist)) $fnlist = $EditFunctions;
   $IsPagePosted = false;
-  foreach((array)$fnlist as $fn) $fn($pagename, $page, $new);
+  foreach((array)$fnlist as $fn) {
+    StopWatch("UpdatePage: $fn ($pagename)");
+    $fn($pagename, $page, $new);
+  }
+  StopWatch("UpdatePage: end $pagename");
   return $IsPagePosted;
 }
 
@@ -1654,7 +1667,7 @@ function PostRecentChanges($pagename,&$page,&$new) {
     if (@$seen[$rcname]++) continue;
     $rcpage = ReadPage($rcname);
     $rcelim = preg_quote(preg_replace("/$RCDelimPattern.*$/",' ',$pgtext),'/');
-    $rcpage['text'] = preg_replace("/[^\n]*$rcelim.*\n/","",@$rcpage['text']);
+    $rcpage['text'] = preg_replace("/^.*$rcelim.*\n/m", '', @$rcpage['text']);
     if (!preg_match("/$RCDelimPattern/",$rcpage['text'])) 
       $rcpage['text'] .= "$pgtext\n";
     else

@@ -158,7 +158,7 @@ function InputDefault($pagename, $type, $args) {
   $args = ParseArgs($args);
   $args[''] = (array)@$args[''];
   $name = (isset($args['name'])) ? $args['name'] : array_shift($args['']);
-  $name = str_replace('/^\\$:/', 'ptv_', $name);
+  $name = preg_replace('/^\\$:/', 'ptv_', $name);
   $value = (isset($args['value'])) ? $args['value'] : array_shift($args['']);
   if (!isset($InputValues[$name])) $InputValues[$name] = $value;
   if (@$args['request']) {
@@ -279,10 +279,11 @@ Markup('e_guibuttons', 'directives', '/\\(:e_guibuttons:\\)/', '');
 SDV($SaveAttrPatterns['/\\(:e_(preview|guibuttons):\\)/'], ' ');
 
 SDVA($InputTags['e_form'], array(
-  ':html' => "<form action='{\$PageUrl}?action=edit' method='post'><input 
-    type='hidden' name='action' value='edit' /><input 
-    type='hidden' name='n' value='{\$FullName}' /><input 
-    type='hidden' name='basetime' value='\$EditBaseTime' />"));
+  ':html' => "<form action='{\$PageUrl}?action=edit' method='post'
+    \$InputFormArgs><input type='hidden' name='action' value='edit' 
+    /><input type='hidden' name='n' value='{\$FullName}' 
+    /><input type='hidden' name='basetime' value='\$EditBaseTime' 
+    />"));
 SDVA($InputTags['e_textarea'], array(
   ':html' => "<textarea \$InputFormArgs 
     onkeydown='if (event.keyCode==27) event.returnValue=false;' 

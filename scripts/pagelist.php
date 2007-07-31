@@ -175,7 +175,7 @@ function FmtPageList($outfmt, $pagename, $opt) {
   $FmtV['$MatchCount'] = count($matches);
   if ($outfmt != '$MatchList') 
     { $FmtV['$MatchList'] = $out; $out = FmtPageName($outfmt, $pagename); }
-  $out = preg_replace('/^(<[^>]+>)(.*)/esm', "PSS('$1').Keep(PSS('$2'))", $out);
+  if ($out[0] == '<') $out = Keep($out);
   return PRR($out);
 }
 
@@ -272,18 +272,18 @@ function PageListSources(&$list, &$opt, $pn, &$page) {
 
   if (@$opt['trail']) {
     $trail = ReadTrail($pn, $opt['trail']);
-    $list = array();
+    $tlist = array();
     foreach($trail as $tstop) {
       $n = $tstop['pagename'];
-      $list[] = $n;
+      $tlist[] = $n;
       $tstop['parentnames'] = array();
       PCache($n, $tstop);
     }
-    $list = MatchPageNames($list, $opt['=pnfilter']);
     foreach($trail as $tstop) 
       $PCache[$tstop['pagename']]['parentnames'][] = 
         @$trail[$tstop['parent']]['pagename'];
-  } else if (@!$opt['=cached']) $list = ListPages($opt['=pnfilter']);
+    if (!@$opt['=cached']) $list = MatchPageNames($tlist, $opt['=pnfilter']);
+  } else if (!@$opt['=cached']) $list = ListPages($opt['=pnfilter']);
 
   StopWatch("PageListSources end count=".count($list));
   return 0;
@@ -472,7 +472,7 @@ function PageListCache(&$list, &$opt, $pn, &$page) {
   if (isset($opt['cache']) && !$opt['cache']) return 0;
  
   $key = $opt['=key'];
-  $cache = "$PageListCacheDir/$key.txt"; 
+  $cache = "$PageListCacheDir/$key,cache"; 
   switch ($opt['=phase']) {
     case PAGELIST_PRE:
       if (!file_exists($cache) || filemtime($cache) <= $LastModTime)
@@ -554,14 +554,15 @@ function FPLCountA($pagename, &$matches, $opt) {
 
 ##  FPLTemplate handles PagelistTemplates
 function FPLTemplate($pagename, &$matches, $opt) {
-  global $Cursor, $FPLTemplatePageFmt, $PageListArgPattern;
+  global $Cursor, $FPLTemplatePageFmt, $RASPageName, $PageListArgPattern;
   SDV($FPLTemplatePageFmt, array('{$FullName}',
     '{$SiteGroup}.LocalTemplates', '{$SiteGroup}.PageListTemplates'));
 
   StopWatch("FPLTemplate begin");
   $template = @$opt['template'];
   if (!$template) $template = @$opt['fmt'];
-  $ttext = PVSE(RetrieveAuthSection($pagename, $template, $FPLTemplatePageFmt));
+  $ttext = RetrieveAuthSection($pagename, $template, $FPLTemplatePageFmt);
+  $ttext = PVSE(Qualify($RASPageName, $ttext));
 
   ##  save any escapes
   $ttext = MarkupEscape($ttext);
@@ -581,7 +582,7 @@ function FPLTemplate($pagename, &$matches, $opt) {
     array_splice($tparts, $i, 3);
   }
 
-  SDV($opt['class'], 'fpltemplate');
+  SDVA($opt, array('class' => 'fpltemplate', 'wrap' => 'div'));
 
   ##  get the list of pages
   $matches = array_values(MakePageList($pagename, $opt, 0));
@@ -655,8 +656,12 @@ function FPLTemplate($pagename, &$matches, $opt) {
   }
 
   $class = preg_replace('/[^-a-zA-Z0-9\\x80-\\xff]/', ' ', @$opt['class']);
-  $div = ($class) ? "<div class='$class'>" : '<div>';
-  $out = $div.MarkupToHTML($pagename, $out, array('escape' => 0)).'</div>';
+  if ($class) $class = " class='$class'";
+  $wrap = @$opt['wrap'];
+  if ($wrap != 'inline') {
+    $out = MarkupToHTML($pagename, $out, array('escape' => 0));
+    if ($wrap != 'none') $out = "<div$class>$out</div>";
+  }
   $Cursor = $savecursor;
   StopWatch("FPLTemplate end");
   return $out;
