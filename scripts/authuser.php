@@ -68,7 +68,7 @@ function AuthUserId($pagename, $id, $pw=NULL) {
   if (is_null($pw)) $authid = $id;
   else 
     foreach($AuthUserFunctions as $k => $fn) 
-      if ($auth[$k] && $fn($pagename, $id, $pw, $auth[$k])) 
+      if (@$auth[$k] && $fn($pagename, $id, $pw, $auth[$k])) 
         { $authid = $id; break; }
 
   if (!$authid) { $GLOBALS['InvalidLogin'] = 1; return; }
@@ -101,7 +101,7 @@ function AuthUserHtPasswd($pagename, $id, $pw, $pwlist) {
     $fp = fopen($f, "r"); if (!$fp) continue;
     while ($x = fgets($fp, 1024)) {
       $x = rtrim($x);
-      list($i, $c, $r) = explode(':', $x, 3);
+      @list($i, $c, $r) = explode(':', $x, 3);
       if ($i == $id && _crypt($pw, $c) == $c) { fclose($fp); return true; }
     }
     fclose($fp);
@@ -130,7 +130,7 @@ function AuthUserLDAP($pagename, $id, $pw, $pwlist) {
   global $AuthLDAPBindDN, $AuthLDAPBindPassword;
   if (!$pw) return false;
   if (!function_exists('ldap_connect')) 
-    Abort('authuser: LDAP authentication requires ldap functions', 'ldapfn');
+    Abort('authuser: LDAP authentication requires PHP ldap functions','ldapfn');
   foreach ((array)$pwlist as $ldap) {
     if (!preg_match('!(ldaps?://[^/]+)/(.*)$!', $ldap, $match))
       continue;

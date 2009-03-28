@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2007 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2009 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -64,30 +64,36 @@ if (IsEnabled($EnableRelativePageVars, 0))
 ## character entities
 Markup('&','<if','/&amp;(?>([A-Za-z0-9]+|#\\d+|#[xX][A-Fa-f0-9]+));/',
   '&$1;');
+Markup('&amp;amp;', '<&', '/&amp;amp;/', Keep('&amp;'));
 
 
 ## (:if:)/(:elseif:)/(:else:)
-Markup('if', 'fulltext',
-  "/ \\(:if (?:end)? \\b[^\n]*?:\\)
+SDV($CondTextPattern, 
+  "/ \\(:if (\d*) (?:end)? \\b[^\n]*?:\\)
      .*?
-     (?: \\(: (?:if|ifend) \\s* :\\)
-     |   (?=\\(:(?:if|ifend)\\b[^\n]*?:\\) | $)
+     (?: \\(: (?:if\\1|if\\1end) \\s* :\\)
+     |   (?=\\(:(?:if\\1|if\\1end)\\b[^\n]*?:\\) | $)
      )
-   /seix",
-  "CondText2(\$pagename, PSS('$0'))");
+   /seix");
+SDV($CondTextReplacement, "CondText2(\$pagename, PSS('$0'), '$1')");
+Markup('if', 'fulltext', $CondTextPattern, $CondTextReplacement);
 
-function CondText2($pagename, $text) {
-  global $Conditions;
-  $parts = preg_split('/\\(:(?:ifend|if|else *if|else)\\b\\s*(.*?)\\s*:\\)/', 
+function CondText2($pagename, $text, $code = '') {
+  global $Conditions, $CondTextPattern, $CondTextReplacement;
+  $if = "if$code";
+  
+  $parts = preg_split("/\\(:(?:{$if}end|$if|else *$if|else$code)\\b\\s*(.*?)\\s*:\\)/", 
                       $text, -1, PREG_SPLIT_DELIM_CAPTURE);
   $x = array_shift($parts);
   while ($parts) {
     list($condspec, $condtext) = array_splice($parts, 0, 2);
     if (!preg_match("/^\\s*(!?)\\s*(\\S*)\\s*(.*?)\\s*$/", $condspec, $match)) continue;
     list($x, $not, $condname, $condparm) = $match;
-    if (!isset($Conditions[$condname])) return $condtext;
+    if (!isset($Conditions[$condname])) 
+      return preg_replace($CondTextPattern, $CondTextReplacement, $condtext);
     $tf = @eval("return ({$Conditions[$condname]});");
-    if ($tf xor $not) return $condtext;
+    if ($tf xor $not)
+      return preg_replace($CondTextPattern, $CondTextReplacement, $condtext);
   }
   return '';
 }
@@ -259,7 +265,7 @@ Markup('[[->','>[[|',
   "Keep(MakeLink(\$pagename,PSS('$2'),PSS('$1'),'$3'),'L')");
 
 if (IsEnabled($EnableRelativePageLinks, 1))
-  SDV($QualifyPatterns['/(\\[\\[(?>[^\\]]+?->)?\\s*)([-\\w\\s\'()]+([|#?].*?)?\\]\\])/e'], "PSS('$1').\$group.PSS('/$2')");
+  SDV($QualifyPatterns['/(\\[\\[(?>[^\\]]+?->)?\\s*)([-\\w\\x80-\\xfe\\s\'()]+([|#?].*?)?\\]\\])/e'], "PSS('$1').\$group.PSS('/$2')");
 
 ## [[#anchor]]
 Markup('[[#','<[[','/(?>\\[\\[#([A-Za-z][-.:\\w]*))\\]\\]/e',
@@ -476,8 +482,8 @@ function CondDate($condparm) {
     if ($x0 < $t0) return false;
     if ($match[2] == '' && $x0 >= $t1) return false;
   }
-  if ($match[3]) {
-    list($t0, $t1) = Drange($match[3]);
+  if ($match[3] > '') {
+    list($t0, $t1) = DRange($match[3]);
     if ($x0 >= $t1) return false;
   }
   return true;

@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2007 Patrick R. Michaud
+    Copyright 2001-2009 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -29,6 +29,8 @@ error_reporting(E_ALL ^ E_NOTICE);
 StopWatch('PmWiki');
 @ini_set('magic_quotes_runtime', 0);
 @ini_set('magic_quotes_sybase', 0);
+if (@ini_get('pcre.backtrack_limit') < 1000000) 
+  @ini_set('pcre.backtrack_limit', 1000000);
 if (ini_get('register_globals')) 
   foreach($_REQUEST as $k=>$v) { 
     if (preg_match('/^(GLOBALS|_SERVER|_GET|_POST|_COOKIE|_FILES|_ENV|_REQUEST|_SESSION|FarmD|WikiDir)$/i', $k)) exit();
@@ -125,15 +127,16 @@ $FmtPV = array(
   '$Namespaced'   => '$AsSpacedFunction($name)',
   '$Group'        => '$group',
   '$Name'         => '$name',
-  '$Titlespaced'  => 
-    '@$page["title"] ? $page["title"] : $AsSpacedFunction($name)',
-  '$Title'        => 
-    '@$page["title"] ? $page["title"] : ($GLOBALS["SpaceWikiWords"]
-       ? $AsSpacedFunction($name) : $name)',
+  '$Titlespaced'  => '@$page["title"] ?
+     str_replace("$", "&#036;", $page["title"]) : $AsSpacedFunction($name)',
+  '$Title'        =>  '@$page["title"] ?
+     str_replace("$", "&#036;", $page["title"]) :
+     ($GLOBALS["SpaceWikiWords"] ? $AsSpacedFunction($name) : $name)',
   '$LastModifiedBy' => '@$page["author"]',
   '$LastModifiedHost' => '@$page["host"]',
   '$LastModified' => 'strftime($GLOBALS["TimeFmt"], $page["time"])',
   '$LastModifiedSummary' => '@$page["csum"]',
+  '$LastModifiedTime' => '$page["time"]',
   '$Description' => '@$page["description"]',
   '$SiteGroup'    => '$GLOBALS["SiteGroup"]',
   '$VersionNum'   => '$GLOBALS["VersionNum"]',
@@ -204,6 +207,8 @@ $ActionTitleFmt = array(
 $DefaultPasswords = array('admin'=>'*','read'=>'','edit'=>'','attr'=>'');
 $AuthCascade = array('edit'=>'read', 'attr'=>'edit');
 $AuthList = array('' => 1, 'nopass:' => 1, '@nopass' => 1);
+$SessionEncode = 'base64_encode';
+$SessionDecode = 'base64_decode';
 
 $Conditions['enabled'] = '(boolean)@$GLOBALS[$condparm]';
 $Conditions['false'] = 'false';
@@ -435,22 +440,46 @@ function StopWatch($x) {
 ## DRange converts a variety of string formats into date (ranges).
 ## It returns the start and end timestamps (+1 second) of the specified date.
 function DRange($when) {
+  global $Now;
   ##  unix/posix @timestamp dates
   if (preg_match('/^\\s*@(\\d+)\\s*(.*)$/', $when, $m)) {
     $t0 = $m[2] ? strtotime($m[2], $m[1]) : $m[1];
     return array($t0, $t0+1);
   }
   ##  ISO-8601 dates
-  $dpat = '#(?<!\\d)(19\\d\\d|20[0-3]\\d)([-./]?)([01]\\d)(?:\\2([0-3]\\d))?(?!\\d)#';
+  $dpat = '/
+    (?<!\\d)                 # non-digit
+    (19\\d\\d|20[0-3]\\d)    # year ($1)
+    ([-.\\/]?)               # date separator ($2)
+    (0\\d|1[0-2])            # month ($3)
+    (?: \\2                  # repeat date separator
+      ([0-2]\\d|3[0-1])      # day ($4)
+      (?: T                  # time marker
+        ([01]\\d|2[0-4])     # hour ($5)
+        ([.:]?)              # time separator ($6)
+        ([0-5]\\d)           # minute ($7)
+        (?: \\6              # repeat time separator
+          ([0-5]\\d|60)      # seconds ($8)
+        )?                   # optional :ss
+      )?                     # optional Thh:mm:ss
+    )?                       # optional -ddThh:mm:ss
+    (?!\d)                   # non-digit
+    /x';
   if (preg_match($dpat, $when, $m)) {
-    if ($m[4] == '') { $m[4] = 1; $d1 = 0; $m1 = 1; }
-    else { $d1 = 1; $m1 = 0; }
-    $t0 = mktime(0, 0, 0, $m[3],       $m[4],       $m[1]);
-    $t1 = mktime(0, 0, 0, $m[3] + $m1, $m[4] + $d1, $m[1]);
+    $n = $m;
+    ##  if no day given, assume 1st of month and full month range
+    if (@$m[4] == '') { $m[4] = 1; $n[4] = 1; $n[3]++; }
+    ##  if no time given, assume range of 1 day
+    if (@$m[5] == '') { @$n[4]++; }
+    ##  if no seconds given, assume range of 1 minute
+    if (@$m[8] == '') { @$n[7]++; }
+    $t0 = @mktime($m[5], $m[7], $m[8], $m[3], $m[4], $m[1]);
+    $t1 = @mktime($n[5], $n[7], $n[8], $n[3], $n[4], $n[1]);
     return array($t0, $t1);
   }
-  ##  today, tomorrow, yesterday
+  ##  now, today, tomorrow, yesterday
   NoCache();
+  if ($when == 'now') return array($Now, $Now+1);
   $m = localtime(time());
   if ($when == 'tomorrow') { $m[3]++; $when = 'today'; }
   if ($when == 'yesterday') { $m[3]--; $when = 'today'; }
@@ -814,7 +843,7 @@ function XLPage($lang,$p) {
     }
     if (@$xl['Locale']) setlocale(LC_ALL,$xl['Locale']);
     if (@$xl['TimeFmt']) $TimeFmt=$xl['TimeFmt'];
-    array_unshift($XLLangs,$lang);
+    if (!in_array($lang, $XLLangs)) array_unshift($XLLangs, $lang);
     XLSDV($lang,$xl);
   }
 }
@@ -1008,7 +1037,7 @@ function RetrieveAuthPage($pagename, $level, $authprompt=true, $since=0) {
 
 function Abort($msg, $info='') {
   # exit pmwiki with an abort message
-  global $ScriptUrl;
+  global $ScriptUrl, $Charset;
   if ($info) 
     $info = "<p class='vspace'><a target='_blank' rel='nofollow' href='http://www.pmwiki.org/pmwiki/info/$info'>$[More information]</a></p>";
   $msg = "<h3>$[PmWiki can't process your request]</h3>
@@ -1016,6 +1045,7 @@ function Abort($msg, $info='') {
     <p class='vspace'>We are sorry for any inconvenience.</p>
     $info
     <p class='vspace'><a href='$ScriptUrl'>$[Return to] $ScriptUrl</a></p>";
+  @header("Content-type: text/html; charset=$Charset");
   echo preg_replace('/\\$\\[([^\\]]+)\\]/e', "XL(PSS('$1'))", $msg);
   exit;
 }
@@ -1140,7 +1170,7 @@ function CondText($pagename,$condspec,$condtext) {
 ##    #abc           - [[#abc]] to next anchor
 ##    #abc#def       - [[#abc]] up to [[#def]]
 ##    #abc#, #abc..  - [[#abc]] to end of text
-##    ##abc, ..#abc  - beginning of text to [[#abc]]
+##    ##abc, #..#abc - beginning of text to [[#abc]]
 ##  Returns the text unchanged if no sections are requested,
 ##  or false if a requested beginning anchor isn't in the text.
 function TextSection($text, $sections, $args = NULL) {
@@ -1228,13 +1258,13 @@ function IncludeText($pagename, $inclspec) {
 
 function RedirectMarkup($pagename, $opt) {
   $k = Keep("(:redirect $opt:)");
-  global $MarkupFrame;
+  global $MarkupFrame, $EnableRedirectQuiet;
   if (!@$MarkupFrame[0]['redirect']) return $k;
   $opt = ParseArgs($opt);
   $to = @$opt['to']; if (!$to) $to = @$opt[''][0];
   if (!$to) return $k;
   if (preg_match('/^([^#]+)(#[A-Za-z][-\\w]*)$/', $to, $match)) 
-    { $to = $match[1]; $anchor = $match[2]; }
+    { $to = $match[1]; $anchor = @$match[2]; }
   $to = MakePageName($pagename, $to);
   if (!PageExists($to)) return $k;
   if ($to == $pagename) return '';
@@ -1243,7 +1273,10 @@ function RedirectMarkup($pagename, $opt) {
     return '';
   if (preg_match('/^30[1237]$/', @$opt['status'])) 
      header("HTTP/1.1 {$opt['status']}");
-  Redirect($to, @"{\$PageUrl}?from=$pagename$anchor");
+  Redirect($to, "{\$PageUrl}"
+    . (IsEnabled($EnableRedirectQuiet, 0) && IsEnabled($opt['quiet'], 0)
+      ? '' : "?from=$pagename")
+    . $anchor);
   exit();
 }
    
@@ -1342,17 +1375,17 @@ function FormatTableRow($x, $sep = '\\|\\|') {
   return "<:table,1><tr $trattr>$y</tr>";
 }
 
-function LinkIMap($pagename,$imap,$path,$title,$txt,$fmt=NULL) {
+function LinkIMap($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   global $FmtV, $IMap, $IMapLinkFmt, $UrlLinkFmt;
   $FmtV['$LinkUrl'] = PUE(str_replace('$1',$path,$IMap[$imap]));
   $FmtV['$LinkText'] = $txt;
-  $FmtV['$LinkAlt'] = str_replace(array('"',"'"),array('&#34;','&#39;'),$title);
+  $FmtV['$LinkAlt'] = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
   if (!$fmt) 
     $fmt = (isset($IMapLinkFmt[$imap])) ? $IMapLinkFmt[$imap] : $UrlLinkFmt;
   return str_replace(array_keys($FmtV),array_values($FmtV),$fmt);
 }
 
-function LinkPage($pagename,$imap,$path,$title,$txt,$fmt=NULL) {
+function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   global $QueryFragPattern, $LinkPageExistsFmt, $LinkPageSelfFmt,
     $LinkPageCreateSpaceFmt, $LinkPageCreateFmt, $LinkTargets,
     $EnableLinkPageRelative;
@@ -1405,13 +1438,13 @@ function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
   return $out;
 }
 
-function Markup($id,$cmd,$pat=NULL,$rep=NULL) {
+function Markup($id, $when, $pat=NULL, $rep=NULL) {
   global $MarkupTable,$MarkupRules;
   unset($MarkupRules);
-  if (preg_match('/^([<>])?(.+)$/',$cmd,$m)) {
-    $MarkupTable[$id]['cmd']=$cmd;
+  if (preg_match('/^([<>])?(.+)$/', $when, $m)) {
+    $MarkupTable[$id]['cmd'] = $when;
     $MarkupTable[$m[2]]['dep'][$id] = $m[1];
-    if (!$m[1]) $m[1]='=';
+    if (!$m[1]) $m[1] = '=';
     if (@$MarkupTable[$m[2]]['seq']) {
       $MarkupTable[$id]['seq'] = $MarkupTable[$m[2]]['seq'].$m[1];
       foreach((array)@$MarkupTable[$id]['dep'] as $i=>$m)
@@ -1420,8 +1453,8 @@ function Markup($id,$cmd,$pat=NULL,$rep=NULL) {
     }
   }
   if ($pat && !isset($MarkupTable[$id]['pat'])) {
-    $MarkupTable[$id]['pat']=$pat;
-    $MarkupTable[$id]['rep']=$rep;
+    $MarkupTable[$id]['pat'] = $pat;
+    $MarkupTable[$id]['rep'] = $rep;
   }
 }
 
@@ -1696,7 +1729,7 @@ function AutoCreateTargets($pagename, &$page, &$new) {
     
 function PreviewPage($pagename,&$page,&$new) {
   global $IsPageSaved, $FmtV;
-  if (@$_POST['preview']) {
+  if (@$_REQUEST['preview']) {
     $text = '(:groupheader:)'.$new['text'].'(:groupfooter:)';
     $FmtV['$PreviewText'] = MarkupToHTML($pagename,$text);
   } 
@@ -1822,9 +1855,10 @@ function PmWikiAuth($pagename, $level, $authprompt=true, $since=0) {
     $postvars .= "<input type='hidden' name='$k' value=\"$v\" />\n";
   }
   $FmtV['$PostVars'] = $postvars;
+  $r = str_replace("'", '%37', stripmagic($_SERVER['REQUEST_URI']));
   SDV($AuthPromptFmt,array(&$PageStartFmt,
     "<p><b>$[Password required]</b></p>
-      <form name='authform' action='{$_SERVER['REQUEST_URI']}' method='post'>
+      <form name='authform' action='$r' method='post'>
         $[Password]: <input tabindex='1' type='password' name='authpw' 
           value='' />
         <input type='submit' value='OK' />\$PostVars</form>
@@ -1873,7 +1907,8 @@ function IsAuthorized($chal, $source, &$from) {
 ## to set the corresponding values of $AuthId, $AuthPw, and $AuthList
 ## as needed.
 function SessionAuth($pagename, $auth = NULL) {
-  global $AuthId, $AuthList, $AuthPw;
+  global $AuthId, $AuthList, $AuthPw, $SessionEncode, $SessionDecode,
+    $EnableSessionPasswords;
   static $called;
 
   @$called++;
@@ -1881,12 +1916,21 @@ function SessionAuth($pagename, $auth = NULL) {
 
   $sid = session_id();
   @session_start();
-  foreach((array)$auth as $k => $v)
-    if ($k) $_SESSION[$k] = (array)$v + (array)@$_SESSION[$k];
+  foreach((array)$auth as $k => $v) {
+    if ($k == 'authpw') {
+      foreach((array)$v as $pw => $pv) {
+        if ($SessionEncode) $pw = $SessionEncode($pw);
+        $_SESSION[$k][$pw] = $pv;
+      }
+    } 
+    else if ($k) $_SESSION[$k] = (array)$v + (array)@$_SESSION[$k];
+  }
 
   if (!isset($AuthId)) $AuthId = @end($_SESSION['authid']);
-  $AuthPw = array_keys((array)@$_SESSION['authpw']);
+  $AuthPw = array_map($SessionDecode, array_keys((array)@$_SESSION['authpw']));
+  if (!IsEnabled($EnableSessionPasswords, 1)) $_SESSION['authpw'] = array();
   $AuthList = array_merge($AuthList, (array)@$_SESSION['authlist']);
+  
   if (!$sid) session_write_close();
 }
 

@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2002-2006 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2002-2009 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -58,11 +58,12 @@ function ReadTrail($pagename, $trailname) {
     $trailname = ($m[2] == '|') ? $m[1] : $m[3];
   $trailtext = RetrieveAuthSection($pagename, $trailname);
   $trailname = $RASPageName;
+  $trailtext = Qualify($trailname, $trailtext);
   $t = array();
   $n = 0;
   foreach(explode("\n", htmlspecialchars(@$trailtext, ENT_NOQUOTES)) 
           as $x) {
-    $x = preg_replace("/\\[\\[([^\\]]*)->([^\\]]*)\\]\\]/",'[[$2|$1]]',$x);
+    $x = preg_replace("/\\[\\[([^\\]]*)-&gt;([^\\]]*)\\]\\]/",'[[$2|$1]]',$x);
     if (!preg_match("/^([#*:]+) \\s* 
           (\\[\\[([^:#!|][^|:]*?)(\\|.*?)?\\]\\]($SuffixPattern)
           | (($GroupPattern([\\/.]))?$WikiWordPattern)) (.*)/x",$x,$match))
