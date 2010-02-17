@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2009 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2010 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -57,7 +57,7 @@ Markup('textvar:', '<split',
   '/\\(:\\w[-\\w]*:(?!\\)).*?:\\)/s', '');
 
 ## handle relative text vars in includes
-if (IsEnabled($EnableRelativePageVars, 0)) 
+if (IsEnabled($EnableRelativePageVars, 1)) 
   SDV($QualifyPatterns["/\\{([-\\w\\x80-\\xfe]*)(\\$:?\\w+\\})/e"], 
     "'{' . ('$1' ? MakePageName(\$pagename, '$1') : \$pagename) . '$2'");
 
@@ -180,11 +180,14 @@ Markup('messages', 'directives',
 ## (:comment:)
 Markup('comment', 'directives', '/\\(:comment .*?:\\)/i', '');
 
-## (:title:)
-Markup('title','directives',
+## (:title:) +fix for PITS:00266, 00779
+$tmpwhen = IsEnabled($EnablePageTitlePriority, 0) ? '<include' : 'directives';
+$tmpkeep = IsEnabled($EnablePageTitlePriority, 0) ? '1' : 'NULL';
+Markup('title', $tmpwhen,
   '/\\(:title\\s(.*?):\\)/ei',
   "PZZ(PCache(\$pagename, 
-         \$zz=array('title' => SetProperty(\$pagename, 'title', PSS('$1')))))");
+    \$zz=array('title' => SetProperty(\$pagename, 'title', PSS('$1'), NULL, $tmpkeep))))");
+unset($tmpwhen, $tmpkeep);
 
 ## (:keywords:), (:description:)
 Markup('keywords', 'directives', 
@@ -388,27 +391,27 @@ Markup('^!', 'block',
 Markup('^----','>^->','/^----+/','<:block,1><hr />');
 
 #### (:table:) markup (AdvancedTables)
-
 function Cells($name,$attr) {
   global $MarkupFrame;
   $attr = PQA($attr);
   $tattr = @$MarkupFrame[0]['tattr'];
   $name = strtolower($name);
   $key = preg_replace('/end$/', '', $name);
-  if (strncmp($key, 'cell', 4) == 0) $key = 'cell';
+  if (preg_match("/^(?:head|cell)/", $name)) $key = 'cell';
   $out = '<:block>'.MarkupClose($key);
   if (substr($name, -3) == 'end') return $out;
   $cf = & $MarkupFrame[0]['closeall'];
   if ($name == 'table') $MarkupFrame[0]['tattr'] = $attr; 
-  else if (strncmp($name, 'cell', 4) == 0) {
+  else if ($key == 'cell') {
     if (strpos($attr, "valign=")===false) $attr .= " valign='top'";
+    $t = (strpos($name, 'head')===0 ) ? 'th' : 'td';
     if (!@$cf['table']) {
        $tattr = @$MarkupFrame[0]['tattr'];
-       $out .= "<table $tattr><tr><td $attr>";
-       $cf['table'] = '</td></tr></table>';
-    } else if ($name == 'cellnr') $out .= "</td></tr><tr><td $attr>";
-    else $out .= "</td><td $attr>";
-    $cf['cell'] = '';
+       $out .= "<table $tattr><tr><$t $attr>";
+       $cf['table'] = '</tr></table>';
+    } else if ( preg_match("/nr$/", $name)) $out .= "</tr><tr><$t $attr>";
+    else $out .= "<$t $attr>";
+    $cf['cell'] = "</$t>";
   } else {
     $out .= "<div $attr>";
     $cf[$key] = '</div>';
@@ -417,7 +420,7 @@ function Cells($name,$attr) {
 }
 
 Markup('table', '<block',
-  '/^\\(:(table|cell|cellnr|tableend|div\\d*(?:end)?)(\\s.*?)?:\\)/ie',
+  '/^\\(:(table|cell|cellnr|head|headnr|tableend|div\\d*(?:end)?)(\\s.*?)?:\\)/ie',
   "Cells('$1',PSS('$2'))");
 Markup('^>>', '<table',
   '/^&gt;&gt;(.+?)&lt;&lt;(.*)$/',
@@ -429,6 +432,8 @@ Markup('^>><<', '<^>>',
 #### special stuff ####
 ## (:markup:) for displaying markup examples
 function MarkupMarkup($pagename, $text, $opt = '') {
+  global $MarkupWordwrapFunction;
+  SDV($MarkupWordwrapFunction, 'wordwrap');
   $MarkupMarkupOpt = array('class' => 'vert');
   $opt = array_merge($MarkupMarkupOpt, ParseArgs($opt));
   $html = MarkupToHTML($pagename, $text, array('escape' => 0));
@@ -437,9 +442,9 @@ function MarkupMarkup($pagename, $text, $opt = '') {
                            "<caption>{$opt['caption']}</caption>");
   $class = preg_replace('/[^-\\s\\w]+/', ' ', @$opt['class']);
   if (strpos($class, 'horiz') !== false) 
-    { $sep = ''; $pretext = wordwrap($text, 40); } 
+    { $sep = ''; $pretext = $MarkupWordwrapFunction($text, 40); } 
   else 
-    { $sep = '</tr><tr>'; $pretext = wordwrap($text, 75); }
+    { $sep = '</tr><tr>'; $pretext = $MarkupWordwrapFunction($text, 75); }
   return Keep(@"<table class='markup $class' align='center'>$caption
       <tr><td class='markup1' valign='top'><pre>$pretext</pre></td>$sep<td 
         class='markup2' valign='top'>$html</td></tr></table>");
