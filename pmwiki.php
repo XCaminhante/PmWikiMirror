@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2010 Patrick R. Michaud
+    Copyright 2001-2011 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -329,10 +329,10 @@ SDV($CurrentTimeISO, strftime($TimeISOFmt, $Now));
 if (IsEnabled($EnableStdConfig,1))
   include_once("$FarmD/scripts/stdconfig.php");
 
-if (is_array($PostConfig) && IsEnabled($EnablePostConfig, 1)) {
+if (is_array($PostConfig)) {
   asort($PostConfig, SORT_NUMERIC);
   foreach ($PostConfig as $k=>$v) {
-    if (!$k || !$v) continue;
+    if (!$k || !$v || $v<0) continue;
     if (function_exists($k)) $k($pagename);
     elseif (file_exists($k)) include_once($k);
   }
@@ -355,9 +355,6 @@ foreach((array)$InterMapFiles as $f) {
   }
 }
 
-$LinkPattern = implode('|',array_keys($LinkFunctions));
-SDV($LinkPageCreateSpaceFmt,$LinkPageCreateFmt);
-
 $keys = array_keys($AuthCascade);
 while ($keys) {
   $k = array_shift($keys); $t = $AuthCascade[$k];
@@ -365,7 +362,11 @@ while ($keys) {
     { unset($AuthCascade[$k]); $AuthCascade[$k] = $t; array_push($keys, $k); }
 }
 
+$LinkPattern = implode('|',array_keys($LinkFunctions));  # after InterMaps
+SDV($LinkPageCreateSpaceFmt,$LinkPageCreateFmt);
 $ActionTitle = FmtPageName(@$ActionTitleFmt[$action], $pagename);
+
+
 if (!@$HandleActions[$action] || !function_exists($HandleActions[$action])) 
   $action='browse';
 if (IsEnabled($EnableActions, 1)) HandleDispatch($pagename, $action);
@@ -606,8 +607,9 @@ function FixGlob($x, $rep = '$1*.$2') {
 ## regexes to include ('/'), regexes to exclude ('!'), or
 ## wildcard patterns (all others).
 function MatchPageNames($pagelist, $pat) {
-  global $Charset;
-  $pcre8 = ($Charset == 'UTF-8')? 'u' : ''; # allow range matches in utf8
+  global $Charset, $EnableRangeMatchUTF8;
+  # allow range matches in utf8; doesn't work on pmwiki.org and possibly elsewhere
+  $pcre8 = (IsEnabled($EnableRangeMatchUTF8,0) && $Charset=='UTF-8')? 'u' : '';
   $pagelist = (array)$pagelist;
   foreach((array)$pat as $p) {
     if (count($pagelist) < 1) break;
@@ -771,10 +773,19 @@ function PageVar($pagename, $var, $pn = '') {
   if ($pn) {
     if (preg_match('/^(.+)[.\\/]([^.\\/]+)$/', $pn, $match)
         && !isset($PCache[$pn]['time']) 
-        && (!@$FmtPV[$var] || strpos($FmtPV[$var], '$page') !== false)) 
-      { $page = ReadPage($pn, READPAGE_CURRENT); PCache($pn, $page); }
+        && (!@$FmtPV[$var] || strpos($FmtPV[$var], '$page') !== false)) {
+      $page = ReadPage($pn, READPAGE_CURRENT);
+      PCache($pn, $page);
+    }
     @list($d, $group, $name) = $match;
     $page = &$PCache[$pn];
+    if(strpos($FmtPV[$var], '$authpage') !== false) {
+      if(!isset($page['=auth']['read'])) {
+        $x = RetrieveAuthPage($pn, 'read', false, READPAGE_CURRENT);
+        if($x) PCache($pn, $x);
+      }
+      if(@$page['=auth']['read']) $authpage = &$page;
+    }
   } else { $group = ''; $name = ''; }
   if (@$FmtPV[$var]) return eval("return ({$FmtPV[$var]});");
   if (strncmp($var, '$:', 2)==0) return PageTextVar($pn, substr($var, 2));
@@ -784,7 +795,7 @@ function PageVar($pagename, $var, $pn = '') {
   
 ## FmtPageName handles $[internationalization] and $Variable 
 ## substitutions in strings based on the $pagename argument.
-function FmtPageName($fmt, $pagename, $expand_globals=1) {
+function FmtPageName($fmt, $pagename) {
   # Perform $-substitutions on $fmt relative to page given by $pagename
   global $GroupPattern, $NamePattern, $EnablePathInfo, $ScriptUrl,
     $GCount, $UnsafeGlobals, $FmtV, $FmtP, $FmtPV, $PCache, $AsSpacedFunction;
@@ -869,16 +880,16 @@ function XLSDV($lang,$a) {
   global $XL;
   foreach($a as $k=>$v) { if (!isset($XL[$lang][$k])) $XL[$lang][$k]=$v; }
 }
-function XLPage($lang,$p) {
-  global $TimeFmt,$XLLangs,$FarmD;
+function XLPage($lang,$p,$nohtml=false) {
+  global $TimeFmt,$XLLangs,$FarmD, $EnableXLPageScriptLoad;
   $page = ReadPage($p, READPAGE_CURRENT);
   if (!$page) return;
   $text = preg_replace("/=>\\s*\n/",'=> ',@$page['text']);
   foreach(explode("\n",$text) as $l)
-    if (preg_match('/^\\s*[\'"](.+?)[\'"]\\s*=>\\s*[\'"](.+)[\'"]/',$l,$match))
-      $xl[stripslashes($match[1])] = stripslashes($match[2]);
+    if (preg_match('/^\\s*[\'"](.+?)[\'"]\\s*=>\\s*[\'"](.+)[\'"]/',$l,$m))
+      $xl[stripslashes($m[1])] = stripslashes($nohtml? htmlspecialchars($m[2]): $m[2]);
   if (isset($xl)) {
-    if (@$xl['xlpage-i18n']) {
+    if (IsEnabled($EnableXLPageScriptLoad, 1) && @$xl['xlpage-i18n']) {
       $i18n = preg_replace('/[^-\\w]/','',$xl['xlpage-i18n']);
       include_once("$FarmD/scripts/xlpage-$i18n.php");
     }
@@ -952,10 +963,11 @@ class PageStore {
       }
       fclose($fp);
     }
-    return @$page;
+    return $this->recode(@$page);
   }
   function write($pagename,$page) {
-    global $Now, $Version;
+    global $Now, $Version, $Charset;
+    $page['charset'] = $Charset;
     $page['name'] = $pagename;
     $page['time'] = $Now;
     $page['host'] = $_SERVER['REMOTE_ADDR'];
@@ -1024,6 +1036,24 @@ class PageStore {
     }
     StopWatch("PageStore::ls end {$this->dirfmt}");
     return $out;
+  }
+  function recode($a) {
+    global $Charset, $PageRecodeFunction, $DefaultPageCharset;
+    if (function_exists($PageRecodeFunction)) return $PageRecodeFunction($a);
+    SDVA($DefaultPageCharset, array(''=>$Charset)); # pre-2.2.31 RecentChanges
+    if (@$DefaultPageCharset[$a['charset']])  # wrong pre-2.2.30 encs. *-2, *-9, *-13
+      $a['charset'] = $DefaultPageCharset[$a['charset']];
+    if (!$a || !$a['charset'] || $Charset==$a['charset']) return $a;
+    if ($Charset=='ISO-8859-1' && $a['charset']=='UTF-8') $F = 'utf8_decode'; # 2.2.31+ documentation
+    elseif ($Charset=='UTF-8' && $a['charset']=='ISO-8859-1') $F = 'utf8_encode'; # utf8 wiki & pre-2.2.30 doc
+    elseif (function_exists('iconv'))
+      $F = create_function('$s', "return iconv('{$a['charset']}', '$Charset//IGNORE', \$s);");
+    elseif (function_exists('mb_convert_encoding'))
+      $F = create_function('$s', "return mb_convert_encoding(\$s, '$Charset', '{$a['charset']}');");
+    else return $a;
+    foreach($a as $k=>$v) $a[$k] = $F($v);
+    $a['charset'] = $Charset;
+    return $a;
   }
 }
 
@@ -1399,7 +1429,7 @@ function FormatTableRow($x, $sep = '\\|\\|') {
     elseif (preg_match('/^!(.*)$/',$td[$i],$match)) 
       { $td[$i]=$match[1]; $t='th'; }
     else $t='td';
-    if (preg_match('/^\\s.*\\s$/',$td[$i])) { $attr .= " align='center'"; }
+    if (preg_match('/^\\s.*\\s$/',$td[$i])) { if ($t!='caption') $attr .= " align='center'"; }
     elseif (preg_match('/^\\s/',$td[$i])) { $attr .= " align='right'"; }
     elseif (preg_match('/\\s$/',$td[$i])) { $attr .= " align='left'"; }
     for ($colspan=1;$i+$colspan<count($td);$colspan++) 
@@ -1416,7 +1446,11 @@ function FormatTableRow($x, $sep = '\\|\\|') {
 }
 
 function LinkIMap($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
-  global $FmtV, $IMap, $IMapLinkFmt, $UrlLinkFmt;
+  global $FmtV, $IMap, $IMapLinkFmt, $UrlLinkFmt, $IMapLocalPath;
+  SDVA($IMapLocalPath, array('Path:'=>1));
+  if(@$IMapLocalPath[$imap]) {
+    $path = preg_replace('/^\\w+:/e', "urlencode('$0')", $path);
+  }
   $FmtV['$LinkUrl'] = PUE(str_replace('$1',$path,$IMap[$imap]));
   $FmtV['$LinkText'] = $txt;
   $FmtV['$LinkAlt'] = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
@@ -1449,10 +1483,11 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   }
   $url = PageVar($tgtname, '$PageUrl');
   $txt = str_replace("$", "&#036;", $txt);
+  $alt = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
   if (@$EnableLinkPageRelative)
     $url = preg_replace('!^[a-z]+://[^/]*!i', '', $url);
-  $fmt = str_replace(array('$LinkUrl', '$LinkText'),
-                     array($url.PUE($qf), $txt), $fmt);
+  $fmt = str_replace(array('$LinkUrl', '$LinkText', '$LinkAlt'),
+                     array($url.PUE($qf), $txt, $alt), $fmt);
   return FmtPageName($fmt,$tgtname);
 }
 
@@ -1509,7 +1544,7 @@ function DisableMarkup() {
     $MarkupTable[$id] = array('cmd' => 'none', 'pat'=>'');
   }
 }
-    
+
 function mpcmp($a,$b) { return @strcmp($a['seq'].'=',$b['seq'].'='); }
 function BuildMarkupRules() {
   global $MarkupTable,$MarkupRules,$LinkPattern;
@@ -1571,9 +1606,13 @@ function HandleBrowse($pagename, $auth = 'read') {
   }
   $opt = array();
   SDV($PageRedirectFmt,"<p><i>($[redirected from] <a rel='nofollow' 
-    href='{\$PageUrl}?action=edit'>{\$FullName}</a>)</i></p>\$HTMLVSpace\n");
+    href='{\$PageUrl}?action=edit'>{\$FullName}</a>)</i></p>\n");
   if (@!$_GET['from']) { $opt['redirect'] = 1; $PageRedirectFmt = ''; }
-  else $PageRedirectFmt = FmtPageName($PageRedirectFmt, $_GET['from']);
+  else {
+    $frompage = MakePageName($pagename, $_GET['from']);
+    $PageRedirectFmt = (!$frompage) ? ''
+      : FmtPageName($PageRedirectFmt, $frompage);
+  }
   if (@$EnableHTMLCache && !$NoHTMLCache && $PageCacheFile && 
       @filemtime($PageCacheFile) > $LastModTime) {
     list($ctext) = unserialize(file_get_contents($PageCacheFile));
@@ -1718,7 +1757,7 @@ function PostPage($pagename, &$page, &$new) {
   SDV($DeleteKeyPattern,"^\\s*delete\\s*$");
   $IsPagePosted = false;
   if ($EnablePost) {
-    $new['charset'] = $Charset;
+    $new['charset'] = $Charset; # kept for now, may be needed if custom PageStore
     $new['author'] = @$Author;
     $new["author:$Now"] = @$Author;
     $new["host:$Now"] = $_SERVER['REMOTE_ADDR'];

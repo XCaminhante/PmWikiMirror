@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2010 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2011 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -98,6 +98,7 @@ function PrintDiff($pagename) {
 # This function converts a single diff entry from the wikipage file
 # into HTML, ready for display.
 function DiffHTML($pagename, $diff) {
+  if (@$_REQUEST['nodiff']>'') return '';
   global $FmtV, $DiffShow, $DiffAddFmt, $DiffDelFmt, $DiffEndDelAddFmt,
   $DiffRenderSourceFunction;
   SDV($DiffRenderSourceFunction, 'DiffRenderSource');
@@ -162,14 +163,15 @@ function DiffRenderSource($in, $out, $which) {
     $a = $which? $out : $in;
     return str_replace("\n","<br />",htmlspecialchars(join("\n",$a)));  
   }
+  $countdifflines = abs(count($in)-count($out));
   $lines = $cnt = $x2 = $y2 = array();
   foreach($in as $line) {
-    $tmp = DiffPrepareInline($line);
+    $tmp = $countdifflines>20 ? array($line) : DiffPrepareInline($line);
     if(!$which) $cnt[] = array(count($x2), count($tmp));
     $x2 = array_merge($x2, $tmp);
   }
   foreach($out as $line) {
-    $tmp = DiffPrepareInline($line);
+    $tmp = $countdifflines>20 ? array($line) : DiffPrepareInline($line);
     if($which) $cnt[] = array(count($y2), count($tmp));
     $y2 = array_merge($y2, $tmp);
   }
