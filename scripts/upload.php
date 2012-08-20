@@ -24,20 +24,22 @@ SDV($EnableUploadOverwrite,1);
 SDVA($UploadExts,array(
   'gif' => 'image/gif', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
   'png' => 'image/png', 'bmp' => 'image/bmp', 'ico' => 'image/x-icon',
-  'wbmp' => 'image/vnd.wap.wbmp',
+  'wbmp'=> 'image/vnd.wap.wbmp', 'svg' => 'image/svg+xml', 'xcf' => 'image/x-xcf',
   'mp3' => 'audio/mpeg', 'au' => 'audio/basic', 'wav' => 'audio/x-wav',
+  'ogg' => 'audio/ogg', 'flac' => 'audio/x-flac',
+  'ogv' => 'video/ogg', 'mp4' => 'video/mp4', 'webm' => 'video/webm',
   'mpg' => 'video/mpeg', 'mpeg' => 'video/mpeg',
   'mov' => 'video/quicktime', 'qt' => 'video/quicktime',
   'wmf' => 'text/plain', 'avi' => 'video/x-msvideo',
   'zip' => 'application/zip', '7z' => 'application/x-7z-compressed',
-  'gz' => 'application/x-gzip', 'tgz' => 'application/x-gzip',
+  'gz'  => 'application/x-gzip', 'tgz' => 'application/x-gzip',
   'rpm' => 'application/x-rpm', 
   'hqx' => 'application/mac-binhex40', 'sit' => 'application/x-stuffit',
   'doc' => 'application/msword', 'ppt' => 'application/vnd.ms-powerpoint',
   'xls' => 'application/vnd.ms-excel', 'mdb' => 'text/plain',
   'exe' => 'application/octet-stream',
   'pdf' => 'application/pdf', 'psd' => 'text/plain', 
-  'ps' => 'application/postscript', 'ai' => 'application/postscript',
+  'ps'  => 'application/postscript', 'ai' => 'application/postscript',
   'eps' => 'application/postscript',
   'htm' => 'text/html', 'html' => 'text/html', 'css' => 'text/css', 
   'fla' => 'application/x-shockwave-flash', 
@@ -47,6 +49,8 @@ SDVA($UploadExts,array(
   'odt' => 'application/vnd.oasis.opendocument.text',
   'ods' => 'application/vnd.oasis.opendocument.spreadsheet',
   'odp' => 'application/vnd.oasis.opendocument.presentation',
+  'odg' => 'application/vnd.oasis.opendocument.graphics',
+  'epub'=> 'application/epub+zip',
   'kml' => 'application/vnd.google-earth.kml+xml',
   'kmz' => 'application/vnd.google-earth.kmz',
   '' => 'text/plain'));
@@ -132,15 +136,16 @@ function LinkUpload($pagename, $imap, $path, $alt, $txt, $fmt=NULL) {
     $path = $match[2];
   }
   $upname = MakeUploadName($pagename, $path);
+  $encname = rawurlencode($upname);
   $filepath = FmtPageName("$UploadFileFmt/$upname", $pagename);
   $FmtV['$LinkUpload'] = 
-    FmtPageName("\$PageUrl?action=upload&amp;upname=$upname", $pagename);
+    FmtPageName("\$PageUrl?action=upload&amp;upname=$encname", $pagename);
   $FmtV['$LinkText'] = $txt;
   if (!file_exists($filepath)) 
     return FmtPageName($LinkUploadCreateFmt, $pagename);
   $path = PUE(FmtPageName(IsEnabled($EnableDirectDownload, 1) 
-                            ? "$UploadUrlFmt$UploadPrefixFmt/$upname"
-                            : "{\$PageUrl}?action=download&amp;upname=$upname",
+                            ? "$UploadUrlFmt$UploadPrefixFmt/$encname"
+                            : "{\$PageUrl}?action=download&amp;upname=$encname",
                           $pagename));
   return LinkIMap($pagename, $imap, $path, $alt, $txt, $fmt);
 }
@@ -163,10 +168,10 @@ function HandleUpload($pagename, $auth = 'upload') {
     $HandleUploadFmt,$PageStartFmt,$PageEndFmt,$PageUploadFmt;
   UploadAuth($pagename, $auth, 1);
   $FmtV['$UploadName'] = MakeUploadName($pagename,@$_REQUEST['upname']);
-  $upresult = htmlspecialchars(@$_REQUEST['upresult']);
-  $uprname = htmlspecialchars(@$_REQUEST['uprname']);
-  $FmtV['$upext'] = htmlspecialchars(@$_REQUEST['upext']);
-  $FmtV['$upmax'] = htmlspecialchars(@$_REQUEST['upmax']);
+  $upresult = PHSC(@$_REQUEST['upresult']);
+  $uprname = PHSC(@$_REQUEST['uprname']);
+  $FmtV['$upext'] = PHSC(@$_REQUEST['upext']);
+  $FmtV['$upmax'] = PHSC(@$_REQUEST['upmax']);
   $FmtV['$UploadResult'] = ($upresult) ?
     FmtPageName("<i>$uprname</i>: $[UL$upresult]",$pagename) : '';
   SDV($HandleUploadFmt,array(&$PageStartFmt,&$PageUploadFmt,&$PageEndFmt));
@@ -308,18 +313,18 @@ function FmtUploadList($pagename, $args) {
   while (($file=readdir($dirp)) !== false) {
     if ($file{0} == '.') continue;
     if (@$matchext && !preg_match(@$matchext, $file)) continue;
-    $filelist[$file] = $file;
+    $filelist[$file] = rawurlencode($file);
   }
   closedir($dirp);
   $out = array();
   natcasesort($filelist);
   $overwrite = '';
-  foreach($filelist as $file=>$x) {
-    $name = PUE("$uploadurl$file");
+  foreach($filelist as $file=>$encfile) {
+    $name = PUE("$uploadurl$encfile");
     $stat = stat("$uploaddir/$file");
     if ($EnableUploadOverwrite) 
       $overwrite = FmtPageName("<a rel='nofollow' class='createlink'
-        href='\$PageUrl?action=upload&amp;upname=$file'>&nbsp;&Delta;</a>", 
+        href='\$PageUrl?action=upload&amp;upname=$encfile'>&nbsp;&Delta;</a>", 
         $pagename);
     $out[] = "<li> <a href='$name'>$file</a>$overwrite ... ".
       number_format($stat['size']) . " bytes ... " . 

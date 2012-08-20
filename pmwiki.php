@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2011 Patrick R. Michaud
+    Copyright 2001-2012 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -48,11 +48,13 @@ $BlockPattern = 'form|div|table|t[rdh]|p|[uo]l|d[ltd]|h[1-6r]|pre|blockquote';
 $WikiWordPattern = '[[:upper:]][[:alnum:]]*(?:[[:upper:]][[:lower:]0-9]|[[:lower:]0-9][[:upper:]])[[:alnum:]]*';
 $WikiDir = new PageStore('wiki.d/{$FullName}');
 $WikiLibDirs = array(&$WikiDir,new PageStore('$FarmD/wikilib.d/{$FullName}'));
+$PageFileEncodeFunction = 'PUE'; # only used if $WikiDir->encodefilenames is set
+$PageFileDecodeFunction = 'urldecode';
 $LocalDir = 'local';
 $InterMapFiles = array("$FarmD/scripts/intermap.txt",
   "$FarmD/local/farmmap.txt", '$SiteGroup.InterMap', 'local/localmap.txt');
 $Newline = "\263";                                 # deprecated, 2.0.0
-$KeepToken = "\235\235";  
+$KeepToken = "\034\034";
 $Now=time();
 define('READPAGE_CURRENT', $Now+604800);
 $TimeFmt = '%B %d, %Y, at %I:%M %p';
@@ -91,10 +93,10 @@ $TableRowIndexMax = 1;
 $UrlExcludeChars = '<>"{}|\\\\^`()[\\]\'';
 $QueryFragPattern = "[?#][^\\s$UrlExcludeChars]*";
 $SuffixPattern = '(?:-?[[:alnum:]]+)*';
-$LinkPageSelfFmt = "<a class='selflink' href='\$LinkUrl'>\$LinkText</a>";
-$LinkPageExistsFmt = "<a class='wikilink' href='\$LinkUrl'>\$LinkText</a>";
+$LinkPageSelfFmt = "<a class='selflink' href='\$LinkUrl' title='\$LinkAlt'>\$LinkText</a>";
+$LinkPageExistsFmt = "<a class='wikilink' href='\$LinkUrl' title='\$LinkAlt'>\$LinkText</a>";
 $LinkPageCreateFmt = 
-  "<a class='createlinktext' rel='nofollow' 
+  "<a class='createlinktext' rel='nofollow' title='\$LinkAlt'
     href='{\$PageUrl}?action=edit'>\$LinkText</a><a rel='nofollow' 
     class='createlink' href='{\$PageUrl}?action=edit'>?</a>";
 $UrlLinkFmt = 
@@ -308,7 +310,7 @@ if (!$pagename &&
 if (preg_match('/[\\x80-\\xbf]/',$pagename)) 
   $pagename=utf8_decode($pagename);
 $pagename = preg_replace('![^[:alnum:]\\x80-\\xff]+$!','',$pagename);
-$FmtPV['$RequestedPage'] = "'".htmlspecialchars($pagename, ENT_QUOTES)."'";
+$FmtPV['$RequestedPage'] = "'".PHSC($pagename, ENT_QUOTES)."'";
 $Cursor['*'] = &$pagename;
 if (function_exists("date_default_timezone_get") ) { # fix PHP5.3 warnings
   @date_default_timezone_set(@date_default_timezone_get());
@@ -389,12 +391,12 @@ function HandleDispatch($pagename, $action, $msg=NULL) {
 function stripmagic($x) 
   { return get_magic_quotes_gpc() ? stripslashes($x) : $x; }
 function pre_r(&$x)
-  { return '<pre>'.htmlspecialchars(print_r($x, true)).'</pre>'; }
+  { return '<pre>'.PHSC(print_r($x, true)).'</pre>'; }
 function PSS($x) 
   { return str_replace('\\"','"',$x); }
 function PVS($x) 
   { return preg_replace("/\n[^\\S\n]*(?=\n)/", "\n<:vspace>", $x); }
-function PVSE($x) { return PVS(htmlspecialchars($x, ENT_NOQUOTES)); }
+function PVSE($x) { return PVS(PHSC($x, ENT_NOQUOTES)); }
 function PZZ($x,$y='') { return ''; }
 function PRR($x=NULL) 
   { if ($x || is_null($x)) $GLOBALS['RedoMarkupLine']++; return $x; }
@@ -433,6 +435,10 @@ function ParseArgs($x, $optpat = '(?>(\\w+)[:=])') {
     $z['#'][] = $v;
   }
   return $z;
+}
+function PHSC($x, $flags=ENT_COMPAT, $enc=null) { # for PHP 5.4
+  if(is_null($enc)) $enc = "ISO-8859-1"; # $GLOBALS['Charset']
+  return htmlspecialchars($x, $flags, $enc);
 }
 function StopWatch($x) { 
   global $StopWatch, $EnableStopWatch;
@@ -887,9 +893,9 @@ function XLPage($lang,$p,$nohtml=false) {
   $text = preg_replace("/=>\\s*\n/",'=> ',@$page['text']);
   foreach(explode("\n",$text) as $l)
     if (preg_match('/^\\s*[\'"](.+?)[\'"]\\s*=>\\s*[\'"](.+)[\'"]/',$l,$m))
-      $xl[stripslashes($m[1])] = stripslashes($nohtml? htmlspecialchars($m[2]): $m[2]);
+      $xl[stripslashes($m[1])] = stripslashes($nohtml? PHSC($m[2]): $m[2]);
   if (isset($xl)) {
-    if (IsEnabled($EnableXLPageScriptLoad, 1) && @$xl['xlpage-i18n']) {
+    if (IsEnabled($EnableXLPageScriptLoad, 0) && @$xl['xlpage-i18n']) {
       $i18n = preg_replace('/[^-\\w]/','',$xl['xlpage-i18n']);
       include_once("$FarmD/scripts/xlpage-$i18n.php");
     }
@@ -915,10 +921,17 @@ function CmpPageAttr($a, $b) {
 class PageStore {
   var $dirfmt;
   var $iswrite;
+  var $encodefilenames;
   var $attr;
+  var $recodefn;
   function PageStore($d='$WorkDir/$FullName', $w=0, $a=NULL) { 
     $this->dirfmt = $d; $this->iswrite = $w; $this->attr = (array)$a;
     $GLOBALS['PageExistsCache'] = array();
+    if (function_exists('iconv') && @iconv("UTF-8", "WINDOWS-1252//IGNORE", 'test')=='test' ) 
+      $this->recodefn = create_function('$s,$from,$to', 'return iconv($from,"$to//IGNORE",$s);');
+    elseif (function_exists('mb_convert_encoding') && @mb_convert_encoding("test", "WINDOWS-1252", "UTF-8")=="test")
+      $this->recodefn = create_function('$s,$from,$to', 'return mb_convert_encoding($s,$to,$from);');
+    else $this->recodefn = false;
   }
   function pagefile($pagename) {
     global $FarmD;
@@ -926,13 +939,23 @@ class PageStore {
     if ($pagename > '') {
       $pagename = str_replace('/', '.', $pagename);
       if ($dfmt == 'wiki.d/{$FullName}')               # optimizations for
-        return "wiki.d/$pagename";                     # standard locations
+        return $this->PFE("wiki.d/$pagename");         # standard locations
       if ($dfmt == '$FarmD/wikilib.d/{$FullName}')     # 
-        return "$FarmD/wikilib.d/$pagename";           #
+        return $this->PFE("$FarmD/wikilib.d/$pagename");
       if ($dfmt == 'wiki.d/{$Group}/{$FullName}')
-        return preg_replace('/([^.]+).*/', 'wiki.d/$1/$0', $pagename);
+        return $this->PFE(preg_replace('/([^.]+).*/', 'wiki.d/$1/$0', $pagename));
     }
-    return FmtPageName($dfmt, $pagename);
+    return $this->PFE(FmtPageName($dfmt, $pagename));
+  }
+  function PFE($f) { # pagefile_encode
+    if (!$this->encodefilenames) return $f;
+    global $PageFileEncodeFunction;
+    return $PageFileEncodeFunction($f);
+  }
+  function PFD($f) { # pagefile_decode
+    if (!$this->encodefilenames) return $f;
+    global $PageFileDecodeFunction;
+    return $PageFileDecodeFunction($f);
   }
   function read($pagename, $since=0) {
     $newline = '';
@@ -963,7 +986,7 @@ class PageStore {
       }
       fclose($fp);
     }
-    return $this->recode(@$page);
+    return $this->recode($pagename, @$page);
   }
   function write($pagename,$page) {
     global $Now, $Version, $Charset;
@@ -1028,7 +1051,7 @@ class PageStore {
         if ($pagefile{0} == '.') continue;
         if ($dirslash < $maxslash && is_dir("$dir/$pagefile"))
           { array_push($dirlist,"$dir/$pagefile"); continue; }
-        if ($dirslash == $maxslash) $o[] = $pagefile;
+        if ($dirslash == $maxslash) $o[] = $this->PFD($pagefile);
       }
       closedir($dfp);
       StopWatch("PageStore::ls merge {$this->dirfmt}");
@@ -1037,21 +1060,24 @@ class PageStore {
     StopWatch("PageStore::ls end {$this->dirfmt}");
     return $out;
   }
-  function recode($a) {
-    global $Charset, $PageRecodeFunction, $DefaultPageCharset;
+  function recode($pagename, $a) {
+    if(!$a) return false;
+    global $Charset, $PageRecodeFunction, $DefaultPageCharset, $EnableOldCharset;
     if (function_exists($PageRecodeFunction)) return $PageRecodeFunction($a);
+    if (IsEnabled($EnableOldCharset)) $a['=oldcharset'] = @$a['charset'];
     SDVA($DefaultPageCharset, array(''=>$Charset)); # pre-2.2.31 RecentChanges
-    if (@$DefaultPageCharset[$a['charset']])  # wrong pre-2.2.30 encs. *-2, *-9, *-13
+    if (@$DefaultPageCharset[$a['charset']]>'')  # wrong pre-2.2.30 encs. *-2, *-9, *-13
       $a['charset'] = $DefaultPageCharset[$a['charset']];
-    if (!$a || !$a['charset'] || $Charset==$a['charset']) return $a;
-    if ($Charset=='ISO-8859-1' && $a['charset']=='UTF-8') $F = 'utf8_decode'; # 2.2.31+ documentation
-    elseif ($Charset=='UTF-8' && $a['charset']=='ISO-8859-1') $F = 'utf8_encode'; # utf8 wiki & pre-2.2.30 doc
-    elseif (function_exists('iconv'))
-      $F = create_function('$s', "return iconv('{$a['charset']}', '$Charset//IGNORE', \$s);");
-    elseif (function_exists('mb_convert_encoding'))
-      $F = create_function('$s', "return mb_convert_encoding(\$s, '$Charset', '{$a['charset']}');");
+    if (!$a['charset'] || $Charset==$a['charset']) return $a;
+    $from = ($a['charset']=='ISO-8859-1') ? 'WINDOWS-1252' : $a['charset'];
+    $to = ($Charset=='ISO-8859-1') ? 'WINDOWS-1252' : $Charset;
+    if ($this->recodefn) $F = $this->recodefn;
+    elseif ($to=='UTF-8' && $from=='WINDOWS-1252') # utf8 wiki & pre-2.2.30 doc
+      $F = create_function('$s,$from,$to', 'return utf8_encode($s);');
+    elseif ($to=='WINDOWS-1252' && $from=='UTF-8') # 2.2.31+ documentation
+      $F = create_function('$s,$from,$to', 'return utf8_decode($s);');
     else return $a;
-    foreach($a as $k=>$v) $a[$k] = $F($v);
+    foreach($a as $k=>$v) $a[$k] = $F($v,$from,$to);
     $a['charset'] = $Charset;
     return $a;
   }
@@ -1246,12 +1272,13 @@ function CondText($pagename,$condspec,$condtext) {
 ##  or false if a requested beginning anchor isn't in the text.
 function TextSection($text, $sections, $args = NULL) {
   $args = (array)$args;
-  $npat = '[[:alpha:]][-\\w*]*';
+  $npat = '[[:alpha:]][-\\w.]*';
   if (!preg_match("/#($npat)?(\\.\\.)?(#($npat)?)?/", $sections, $match))
     return $text;
   @list($x, $aa, $dots, $b, $bb) = $match;
   if (!$dots && !$b) $bb = $npat;
   if ($aa) {
+    $aa = preg_replace('/\\.\\.$/', '', $aa);
     $pos = strpos($text, "[[#$aa]]");  if ($pos === false) return false;
     if (@$args['anchors']) 
       while ($pos > 0 && $text[$pos-1] != "\n") $pos--;
@@ -1291,7 +1318,6 @@ function IncludeText($pagename, $inclspec) {
   global $MaxIncludes, $IncludeOpt, $InclCount, $PCache;
   SDV($MaxIncludes,50);
   SDVA($IncludeOpt, array('self'=>1));
-  $npat = '[[:alpha:]][-\\w]*';
   if ($InclCount++>=$MaxIncludes) return Keep($inclspec);
   $args = array_merge($IncludeOpt, ParseArgs($inclspec));
   while (count($args['#'])>0) {
@@ -1482,6 +1508,7 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
              ? $LinkPageSelfFmt : $LinkPageExistsFmt;
   }
   $url = PageVar($tgtname, '$PageUrl');
+  if (trim($txt) == '+') $txt = PageVar($tgtname, '$Title');
   $txt = str_replace("$", "&#036;", $txt);
   $alt = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
   if (@$EnableLinkPageRelative)
@@ -1492,17 +1519,20 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
 }
 
 function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
-  global $LinkPattern,$LinkFunctions,$UrlExcludeChars,$ImgExtPattern,$ImgTagFmt;
+  global $LinkPattern,$LinkFunctions,$UrlExcludeChars,$ImgExtPattern,$ImgTagFmt,
+    $LinkTitleFunction;
   $t = preg_replace('/[()]/','',trim($tgt));
   $t = preg_replace('/<[^>]*>/','',$t);
   preg_match("/^($LinkPattern)?(.+?)(\"(.*)\")?$/",$t,$m);
   if (!$m[1]) $m[1]='<:page>';
+  if (preg_match("/\"(.*)\"$/",trim($tgt),$x)) $m[4]=$x[1];
   if (preg_match("/(($LinkPattern)([^$UrlExcludeChars]+$ImgExtPattern))(\"(.*)\")?$/",$txt,$tm)) 
     $txt = $LinkFunctions[$tm[2]]($pagename,$tm[2],$tm[3],@$tm[5],
       $tm[1],$ImgTagFmt);
   else {
     if (is_null($txt)) {
       $txt = preg_replace('/\\([^)]*\\)/','',$tgt);
+      if (@$m[3]) $txt = preg_replace('/"(.*)"(\\s*)$/','$2',$txt);
       if ($m[1]=='<:page>') {
         $txt = preg_replace('!/\\s*$!', '', $txt);
         $txt = preg_replace('!^.*[^<]/!', '', $txt);
@@ -1510,8 +1540,9 @@ function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
     }
     $txt .= $suffix;
   }
+  if (@$LinkTitleFunction) $m[4] = $LinkTitleFunction($pagename,$m,$txt);
   $out = $LinkFunctions[$m[1]]($pagename,$m[1],$m[2],@$m[4],$txt,$fmt);
-  return $out;
+  return preg_replace('/(<[^>]+) title=(""|\'\')/', '$1', $out);
 }
 
 function Markup($id, $when, $pat=NULL, $rep=NULL) {
@@ -1854,7 +1885,7 @@ function HandleEdit($pagename, $auth = 'edit') {
   $FmtV['$DiffClassMinor'] = 
     (@$_POST['diffclass']=='minor') ?  "checked='checked'" : '';
   $FmtV['$EditText'] = 
-    str_replace('$','&#036;',htmlspecialchars(@$new['text'],ENT_NOQUOTES));
+    str_replace('$','&#036;',PHSC(@$new['text'],ENT_NOQUOTES));
   $FmtV['$EditBaseTime'] = $Now;
   if (@$PageEditForm) {
     $efpage = FmtPageName($PageEditForm, $pagename);
@@ -1950,9 +1981,9 @@ function PmWikiAuth($pagename, $level, $authprompt=true, $since=0) {
   $postvars = '';
   foreach($_POST as $k=>$v) {
     if ($k == 'authpw' || $k == 'authid') continue;
-    $k = htmlspecialchars(stripmagic($k), ENT_QUOTES);
+    $k = PHSC(stripmagic($k), ENT_QUOTES);
     $v = str_replace('$', '&#036;', 
-             htmlspecialchars(stripmagic($v), ENT_COMPAT));
+             PHSC(stripmagic($v), ENT_COMPAT));
     $postvars .= "<input type='hidden' name='$k' value=\"$v\" />\n";
   }
   $FmtV['$PostVars'] = $postvars;
@@ -2051,12 +2082,12 @@ function PasswdVar($pagename, $level) {
     $FmtV['$PWCascade'] = substr($pwsource, 8);
     return FmtPageName('$[(using $PWCascade password)]', $pagename);
   }
-  $setting = htmlspecialchars(implode(' ', preg_replace('/^(?!@|\\w+:).+$/', '****',
+  $setting = PHSC(implode(' ', preg_replace('/^(?!@|\\w+:).+$/', '****',
                                        (array)$page['=passwd'][$level])));
   if ($pwsource == 'group' || $pwsource == 'site') {
     $FmtV['$PWSource'] = $pwsource;
     $setting = FmtPageName('$[(set by $PWSource)] ', $pagename)
-       . htmlspecialchars($setting);
+       . PHSC($setting);
   }
   return $setting;
 }
@@ -2074,7 +2105,7 @@ function PrintAttrForm($pagename) {
     if (strncmp($attr, 'passwd', 6) == 0) {
       $setting = PageVar($pagename, '$Passwd'.ucfirst(substr($attr, 6)));
       $value = '';
-    } else { $setting = $value = htmlspecialchars(@$page[$attr]); }
+    } else { $setting = $value = PHSC(@$page[$attr]); }
     $prompt = FmtPageName($p,$pagename);
     echo "<tr><td>$prompt</td>
       <td><input type='text' name='$attr' value='$value' /></td>

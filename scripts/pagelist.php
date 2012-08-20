@@ -58,7 +58,7 @@ SDV($SearchResultsFmt, "<div class='wikisearch'>\$[SearchFor]
   <div class='vspace'></div>\$MatchList
   <div class='vspace'></div>\$[SearchFound]</div>");
 SDV($SearchQuery, str_replace('$', '&#036;', 
-  htmlspecialchars(stripmagic(@$_REQUEST['q']), ENT_NOQUOTES)));
+  PHSC(stripmagic(@$_REQUEST['q']), ENT_NOQUOTES)));
 XLSDV('en', array(
   'SearchFor' => 'Results of search for <em>$Needle</em>:',
   'SearchFound' => 
@@ -140,7 +140,7 @@ function FmtPageList($outfmt, $pagename, $opt) {
   global $GroupPattern, $FmtV, $PageListArgPattern, 
     $FPLFormatOpt, $FPLFunctions;
   # get any form or url-submitted request
-  $rq = htmlspecialchars(stripmagic(@$_REQUEST['q']), ENT_NOQUOTES);
+  $rq = PHSC(stripmagic(@$_REQUEST['q']), ENT_NOQUOTES);
   # build the search string
   $FmtV['$Needle'] = $opt['o'] . ' ' . $rq;
   # Handle "group/" at the beginning of the form-submitted request
@@ -189,6 +189,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   SDVA($MakePageListOpt, array('list' => 'default'));
   $opt = array_merge((array)$MakePageListOpt, (array)$opt);
   if (!@$opt['order'] && !@$opt['trail']) $opt['order'] = 'name';
+  $opt['order'] = preg_replace('/[^-\\w:$]+/', ',', $opt['order']);
 
   ksort($opt); $opt['=key'] = md5(serialize($opt));
 
@@ -419,7 +420,7 @@ function PageListSort(&$list, &$opt, $pn, &$page) {
   switch ($opt['=phase']) {
     case PAGELIST_PRE:
       $ret = 0;
-      foreach(preg_split('/[\\s,|]+/', @$opt['order'], -1, PREG_SPLIT_NO_EMPTY) 
+      foreach(preg_split('/[^-\\w:$]+/', @$opt['order'], -1, PREG_SPLIT_NO_EMPTY) 
               as $o) {
         $ret |= PAGELIST_POST;
         $r = '+';
@@ -602,7 +603,9 @@ function FPLTemplateDefaults($pagename, $matches, &$opt, &$tparts){
   while ($i < count($tparts)) {
     if ($tparts[$i] != 'template') { $i++; continue; }
     if ($tparts[$i+2] != 'defaults' && $tparts[$i+2] != 'default') { $i+=5; continue; }
-    $opt = array_merge(ParseArgs($tparts[$i+3], $PageListArgPattern), $opt);
+    $pvars = $GLOBALS['MarkupTable']['{$var}']; # expand {$PVars}
+    $ttext = preg_replace($pvars['pat'], $pvars['rep'], $tparts[$i+3]);
+    $opt = array_merge(ParseArgs($ttext, $PageListArgPattern), $opt);
     array_splice($tparts, $i, 4);
   }
   SDVA($opt, array('class' => 'fpltemplate', 'wrap' => 'div'));
@@ -639,7 +642,7 @@ function FPLTemplateFormat($pagename, $matches, $opt, $tparts, &$output){
 
   foreach(preg_grep('/^[\\w$]/', array_keys($opt)) as $k) 
     if (!is_array($opt[$k]))
-      $pseudovars["{\$\$$k}"] = htmlspecialchars($opt[$k], ENT_NOQUOTES);
+      $pseudovars["{\$\$$k}"] = PHSC($opt[$k], ENT_NOQUOTES);
 
   $vk = array_keys($pseudovars);
   $vv = array_values($pseudovars);
