@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2012 Patrick R. Michaud
+    Copyright 2001-2013 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -25,7 +25,8 @@
     write me at <pmichaud@pobox.com> with your question(s) and I'll
     provide explanations (and add comments) that answer them.
 */
-error_reporting(E_ALL ^ E_NOTICE);
+if(!defined('E_DEPRECATED')) error_reporting(E_ALL ^ E_NOTICE);
+else error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED); # PHP 5.5 preg_replace /e flag
 StopWatch('PmWiki');
 @ini_set('magic_quotes_runtime', 0);
 @ini_set('magic_quotes_sybase', 0);
@@ -331,7 +332,7 @@ SDV($CurrentTimeISO, strftime($TimeISOFmt, $Now));
 if (IsEnabled($EnableStdConfig,1))
   include_once("$FarmD/scripts/stdconfig.php");
 
-if (is_array($PostConfig)) {
+if (isset($PostConfig) && is_array($PostConfig)) {
   asort($PostConfig, SORT_NUMERIC);
   foreach ($PostConfig as $k=>$v) {
     if (!$k || !$v || $v<0) continue;
@@ -404,7 +405,7 @@ function PUE($x)
   { return preg_replace('/[\\x80-\\xff \'"<>]/e', "'%'.dechex(ord('$0'))", $x); }
 function PQA($x) { 
   $out = '';
-  if (preg_match_all('/([a-zA-Z]+)\\s*=\\s*("[^"]*"|\'[^\']*\'|\\S*)/',
+  if (preg_match_all('/([a-zA-Z][-\\w]*)\\s*=\\s*("[^"]*"|\'[^\']*\'|\\S*)/',
                      $x, $attr, PREG_SET_ORDER)) {
     foreach($attr as $a) {
       if (preg_match('/^on/i', $a[1])) continue;
@@ -576,15 +577,20 @@ function mkdirp($dir) {
 
 ## fixperms attempts to correct permissions on a file or directory
 ## so that both PmWiki and the account (current dir) owner can manipulate it
-function fixperms($fname, $add = 0) {
+function fixperms($fname, $add = 0, $set = 0) {
   clearstatcache();
   if (!file_exists($fname)) Abort('?no such file');
-  $bp = 0;
-  if (fileowner($fname)!=@fileowner('.')) $bp = (is_dir($fname)) ? 007 : 006;
-  if (filegroup($fname)==@filegroup('.')) $bp <<= 3;
-  $bp |= $add;
-  if ($bp && (fileperms($fname) & $bp) != $bp)
-    @chmod($fname,fileperms($fname)|$bp);
+  if ($set) { # advanced admins, $UploadPermSet
+    if (fileperms($fname) != $set) @chmod($fname,$set);
+  }
+  else {
+    $bp = 0;
+    if (fileowner($fname)!=@fileowner('.')) $bp = (is_dir($fname)) ? 007 : 006;
+    if (filegroup($fname)==@filegroup('.')) $bp <<= 3;
+    $bp |= $add;
+    if ($bp && (fileperms($fname) & $bp) != $bp)
+      @chmod($fname,fileperms($fname)|$bp);
+  }
 }
 
 ## GlobToPCRE converts wildcard patterns into pcre patterns for
@@ -884,7 +890,13 @@ function XL($key) {
 }
 function XLSDV($lang,$a) {
   global $XL;
-  foreach($a as $k=>$v) { if (!isset($XL[$lang][$k])) $XL[$lang][$k]=$v; }
+  foreach($a as $k=>$v) {
+    if (!isset($XL[$lang][$k])) {
+      if(preg_match('/^e_(rows|cols)$/', $k)) $v = intval($v);
+      elseif(preg_match('/^ak_/', $k)) $v = $v{0};
+      $XL[$lang][$k]=$v;
+    }
+  }
 }
 function XLPage($lang,$p,$nohtml=false) {
   global $TimeFmt,$XLLangs,$FarmD, $EnableXLPageScriptLoad;
@@ -928,9 +940,9 @@ class PageStore {
     $this->dirfmt = $d; $this->iswrite = $w; $this->attr = (array)$a;
     $GLOBALS['PageExistsCache'] = array();
     if (function_exists('iconv') && @iconv("UTF-8", "WINDOWS-1252//IGNORE", 'test')=='test' ) 
-      $this->recodefn = create_function('$s,$from,$to', 'return iconv($from,"$to//IGNORE",$s);');
+      $this->recodefn = create_function('$s,$from,$to', 'return @iconv($from,"$to//IGNORE",$s);');
     elseif (function_exists('mb_convert_encoding') && @mb_convert_encoding("test", "WINDOWS-1252", "UTF-8")=="test")
-      $this->recodefn = create_function('$s,$from,$to', 'return mb_convert_encoding($s,$to,$from);');
+      $this->recodefn = create_function('$s,$from,$to', 'return @mb_convert_encoding($s,$to,$from);');
     else $this->recodefn = false;
   }
   function pagefile($pagename) {
@@ -1065,9 +1077,9 @@ class PageStore {
     global $Charset, $PageRecodeFunction, $DefaultPageCharset, $EnableOldCharset;
     if (function_exists($PageRecodeFunction)) return $PageRecodeFunction($a);
     if (IsEnabled($EnableOldCharset)) $a['=oldcharset'] = @$a['charset'];
-    SDVA($DefaultPageCharset, array(''=>$Charset)); # pre-2.2.31 RecentChanges
+    SDVA($DefaultPageCharset, array(''=>@$Charset)); # pre-2.2.31 RecentChanges
     if (@$DefaultPageCharset[$a['charset']]>'')  # wrong pre-2.2.30 encs. *-2, *-9, *-13
-      $a['charset'] = $DefaultPageCharset[$a['charset']];
+      $a['charset'] = $DefaultPageCharset[@$a['charset']];
     if (!$a['charset'] || $Charset==$a['charset']) return $a;
     $from = ($a['charset']=='ISO-8859-1') ? 'WINDOWS-1252' : $a['charset'];
     $to = ($Charset=='ISO-8859-1') ? 'WINDOWS-1252' : $Charset;
@@ -1489,9 +1501,11 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   global $QueryFragPattern, $LinkPageExistsFmt, $LinkPageSelfFmt,
     $LinkPageCreateSpaceFmt, $LinkPageCreateFmt, $LinkTargets,
     $EnableLinkPageRelative;
+  $alt = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
   if (!$fmt && $path{0} == '#') {
     $path = preg_replace("/[^-.:\\w]/", '', $path);
-    return ($path) ? "<a href='#$path'>$txt</a>" : '';
+    if($alt) $alt = " title='$alt'";
+    return ($path) ? "<a href='#$path'$alt>".str_replace("$", "&#036;", $txt)."</a>" : '';
   }
   if (!preg_match("/^\\s*([^#?]+)($QueryFragPattern)?$/",$path,$match))
     return '';
@@ -1510,7 +1524,6 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   $url = PageVar($tgtname, '$PageUrl');
   if (trim($txt) == '+') $txt = PageVar($tgtname, '$Title');
   $txt = str_replace("$", "&#036;", $txt);
-  $alt = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
   if (@$EnableLinkPageRelative)
     $url = preg_replace('!^[a-z]+://[^/]*!i', '', $url);
   $fmt = str_replace(array('$LinkUrl', '$LinkText', '$LinkAlt'),
@@ -2064,7 +2077,7 @@ function SessionAuth($pagename, $auth = NULL) {
   if (!IsEnabled($EnableSessionPasswords, 1)) $_SESSION['authpw'] = array();
   $AuthList = array_merge($AuthList, (array)@$_SESSION['authlist']);
   
-  if (!$sid) session_write_close();
+  if (!$sid) @session_write_close();
 }
 
 
