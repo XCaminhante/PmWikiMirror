@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2015 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2016 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -26,7 +26,7 @@ SDV($EnableUploadOverwrite,1);
 SDVA($UploadExts,array(
   'gif' => 'image/gif', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
   'png' => 'image/png', 'bmp' => 'image/bmp', 'ico' => 'image/x-icon',
-  'wbmp'=> 'image/vnd.wap.wbmp', 'svg' => 'image/svg+xml', 'xcf' => 'image/x-xcf',
+  'wbmp'=> 'image/vnd.wap.wbmp', 'svg' => 'image/svg+xml', 'svgz' => 'image/svg+xml', 'xcf' => 'image/x-xcf',
   'mp3' => 'audio/mpeg', 'au' => 'audio/basic', 'wav' => 'audio/x-wav',
   'ogg' => 'audio/ogg', 'flac' => 'audio/x-flac',
   'ogv' => 'video/ogg', 'mp4' => 'video/mp4', 'webm' => 'video/webm',
@@ -83,7 +83,7 @@ SDV($PageUploadFmt,array("
   <div id='wikiupload'>
   <h2 class='wikiaction'>$[Attachments for] {\$FullName}</h2>
   <h3>\$UploadResult</h3>
-  <form enctype='multipart/form-data' action='{\$PageUrl}' method='post'>
+  <form enctype='multipart/form-data' action='{\$PageUrl}?action=postupload' method='post'>
   <input type='hidden' name='n' value='{\$FullName}' />
   <input type='hidden' name='action' value='postupload' />
   <table border='0'>
@@ -107,7 +107,7 @@ XLSDV('en',array(
   'ULpquota' => 'group quota exceeded',
   'ULtquota' => 'upload quota exceeded'));
 SDV($PageAttributes['passwdupload'],'$[Set new upload password:]');
-SDV($DefaultPasswords['upload'],'*');
+SDV($DefaultPasswords['upload'],'@lock');
 SDV($AuthCascade['upload'], 'read');
 SDV($FmtPV['$PasswdUpload'], 'PasswdVar($pn, "upload")');
 

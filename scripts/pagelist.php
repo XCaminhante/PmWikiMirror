@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2015 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2016 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -109,7 +109,7 @@ define('PAGELIST_POST', 4);
 ## If $SearchBoxFmt is defined, that is used, otherwise a searchbox
 ## is generated.  Options include group=, size=, label=.
 function SearchBox($pagename, $opt) {
-  global $SearchBoxFmt, $SearchBoxOpt, $SearchQuery, $EnablePathInfo;
+  global $SearchBoxFmt, $SearchBoxInputType, $SearchBoxOpt, $SearchQuery, $EnablePathInfo;
   if (isset($SearchBoxFmt)) return Keep(FmtPageName($SearchBoxFmt, $pagename));
   SDVA($SearchBoxOpt, array('size' => '40', 
     'label' => FmtPageName('$[Search]', $pagename),
@@ -125,12 +125,14 @@ function SearchBox($pagename, $opt) {
     if ($v == '' || is_array($v)) continue;
     $v = str_replace("'", "&#039;", $v);
     $opt[$k] = $v;
-    if ($k == 'q' || $k == 'label' || $k == 'value' || $k == 'size') continue;
+    if(preg_match('/^(q|label|value|size|placeholder)$/', $k)) continue;
     $k = str_replace("'", "&#039;", $k);
     $out .= "<input type='hidden' name='$k' value='$v' />";
   }
-  $out .= "<input type='text' name='q' value='{$opt['value']}' 
-    class='inputbox searchbox' size='{$opt['size']}' /><input type='submit' 
+  SDV($SearchBoxInputType, 'text');
+  $out .= "<input type='$SearchBoxInputType' name='q' value='{$opt['value']}' ";
+  if(@$opt['placeholder']) $out .= "  placeholder='{$opt['placeholder']}' ";
+  $out .= "  class='inputbox searchbox' size='{$opt['size']}' /><input type='submit' 
     class='inputbutton searchbutton' value='{$opt['label']}' />";
   return '<form '.Keep($out).'</form>';
 }
@@ -162,6 +164,8 @@ function FmtPageList($outfmt, $pagename, $opt) {
     $cleanrequest = array();
     foreach($rkeys as $k) {
       $cleanrequest[$k] = stripmagic($_REQUEST[$k]);
+      if(substr($k, 0, 4)=='ptv_') # defined separately in forms
+        $cleanrequest['$:'.substr($k, 4)] = stripmagic($_REQUEST[$k]);
     }
     $opt = array_merge($opt, ParseArgs($rq, $PageListArgPattern), $cleanrequest);
   }

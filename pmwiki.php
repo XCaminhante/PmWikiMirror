@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2015 Patrick R. Michaud
+    Copyright 2001-2016 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -140,6 +140,7 @@ $FmtPV = array(
   '$LastModifiedTime' => '$page["time"]',
   '$Description'  => '@$page["description"]',
   '$SiteGroup'    => '$GLOBALS["SiteGroup"]',
+  '$SiteAdminGroup' => '$GLOBALS["SiteAdminGroup"]',
   '$VersionNum'   => '$GLOBALS["VersionNum"]',
   '$Version'      => '$GLOBALS["Version"]',
   '$WikiTitle'    => '$GLOBALS["WikiTitle"]',
@@ -155,7 +156,7 @@ $FmtPV = array(
   );
 $SaveProperties = array('title', 'description', 'keywords');
 $PageTextVarPatterns = array(
-  'var:'        => '/^(:*\\s*(\\w[-\\w]*)\\s*:[ \\t]?)(.*)($)/m',
+  'var:'        => '/^(:*[ \\t]*(\\w[-\\w]*)[ \\t]*:[ \\t]?)(.*)($)/m',
   '(:var:...:)' => '/(\\(: *(\\w[-\\w]*) *:(?!\\))\\s?)(.*?)(:\\))/s'
   );
 
@@ -169,11 +170,12 @@ $HTTPHeaders = array(
 $CacheActions = array('browse','diff','print');
 $EnableHTMLCache = 0;
 $NoHTMLCache = 0;
+$HTMLTagAttr = '';
 $HTMLDoctypeFmt = 
   "<!DOCTYPE html 
     PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\"
     \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">
-  <html xmlns='http://www.w3.org/1999/xhtml' xml:lang='en' lang='en'><head>\n";
+  <html xmlns='http://www.w3.org/1999/xhtml' \$HTMLTagAttr><head>\n";
 $HTMLStylesFmt['pmwiki'] = "
   ul, ol, pre, dl, p { margin-top:0px; margin-bottom:0px; }
   code.escaped { white-space: nowrap; }
@@ -207,7 +209,7 @@ $ActionTitleFmt = array(
   'edit' => '| $[Edit]',
   'attr' => '| $[Attributes]',
   'login' => '| $[Login]');
-$DefaultPasswords = array('admin'=>'*','read'=>'','edit'=>'','attr'=>'');
+$DefaultPasswords = array('admin'=>'@lock','read'=>'','edit'=>'','attr'=>'');
 $AuthCascade = array('edit'=>'read', 'attr'=>'edit');
 $AuthList = array('' => 1, 'nopass:' => 1, '@nopass' => 1);
 $SessionEncode = 'base64_encode';
@@ -279,7 +281,7 @@ Markup_e('closeall', '_begin',
   '/^\\(:closeall:\\)$/',
   "'<:block>' . MarkupClose()");
 
-$ImgExtPattern="\\.(?:gif|jpg|jpeg|png|GIF|JPG|JPEG|PNG)";
+$ImgExtPattern="\\.(?:gif|jpg|jpeg|png|svgz?|GIF|JPG|JPEG|PNG|SVGZ?)";
 $ImgTagFmt="<img src='\$LinkUrl' alt='\$LinkAlt' title='\$LinkAlt' />";
 
 $BlockMarkups = array(
@@ -398,8 +400,13 @@ function HandleDispatch($pagename, $action, $msg=NULL) {
 }
 
 ## helper functions
-function stripmagic($x) 
-  { return get_magic_quotes_gpc() ? stripslashes($x) : $x; }
+function stripmagic($x) {
+  if (is_array($x)) {
+    foreach($x as $k=>$v) $x[$k] = stripmagic($v);
+    return $x;
+  }
+  return get_magic_quotes_gpc() ? stripslashes($x) : $x; 
+}
 function pre_r(&$x)
   { return '<pre>'.PHSC(print_r($x, true)).'</pre>'; }
 function PSS($x) 
@@ -446,10 +453,10 @@ function ParseArgs($x, $optpat = '(?>(\\w+)[:=])') {
   }
   return $z;
 }
-function PHSC($x, $flags=ENT_COMPAT, $enc=null) { # for PHP 5.4
+function PHSC($x, $flags=ENT_COMPAT, $enc=null, $dbl_enc=true) { # for PHP 5.4
   if (is_null($enc)) $enc = "ISO-8859-1"; # single-byte charset
-  if (! is_array($x)) return htmlspecialchars($x, $flags, $enc);
-  foreach($x as $k=>$v) $x[$k] = PHSC($v, $flags, $enc);
+  if (! is_array($x)) return htmlspecialchars($x, $flags, $enc, $dbl_enc);
+  foreach($x as $k=>$v) $x[$k] = PHSC($v, $flags, $enc, $dbl_enc);
   return $x;  
 }
 function PCCF($code, $template = 'default', $args = '$m') {
@@ -864,7 +871,7 @@ function FmtPageName($fmt, $pagename) {
   $fmt = PPRE('/\\$\\[(?>([^\\]]+))\\]/',"XL(\$m[1])",$fmt);
   $fmt = str_replace('{$ScriptUrl}', '$ScriptUrl', $fmt);
   $fmt = 
-    PPRE('/\\{(\\$[A-Z]\\w+)\\}/', "PageVar('$pagename', \$m[1])", $fmt);
+    PPRE('/\\{\\*?(\\$[A-Z]\\w+)\\}/', "PageVar('$pagename', \$m[1])", $fmt);
   if (strpos($fmt,'$')===false) return $fmt;
   if ($FmtP) $fmt = PPRA($FmtP, $fmt); # FIXME
   static $pv, $pvpat;
@@ -986,6 +993,9 @@ class PageStore {
   var $recodefn;
   var $u8decode;
   var $u8encode;
+  public function __construct($d='$WorkDir/$FullName', $w=0, $a=NULL) {
+    $this->PageStore($d, $w, $a);
+  }
   function PageStore($d='$WorkDir/$FullName', $w=0, $a=NULL) { 
     $this->dirfmt = $d; $this->iswrite = $w; $this->attr = (array)$a;
     $GLOBALS['PageExistsCache'] = array();
@@ -1054,12 +1064,13 @@ class PageStore {
     return $this->recode($pagename, @$page);
   }
   function write($pagename,$page) {
-    global $Now, $Version, $Charset;
+    global $Now, $Version, $Charset, $EnableRevUserAgent;
     $page['charset'] = $Charset;
     $page['name'] = $pagename;
     $page['time'] = $Now;
     $page['host'] = $_SERVER['REMOTE_ADDR'];
     $page['agent'] = @$_SERVER['HTTP_USER_AGENT'];
+    if(IsEnabled($EnableRevUserAgent, 0)) $page["agent:$Now"] = $page['agent'];
     $page['rev'] = @$page['rev']+1;
     unset($page['version']); unset($page['newline']);
     uksort($page, 'CmpPageAttr');
@@ -1557,11 +1568,16 @@ function LinkIMap($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
 function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   global $QueryFragPattern, $LinkPageExistsFmt, $LinkPageSelfFmt,
     $LinkPageCreateSpaceFmt, $LinkPageCreateFmt, $LinkTargets,
-    $EnableLinkPageRelative;
+    $EnableLinkPageRelative, $EnableLinkPlusTitlespaced;
   $alt = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
+  $path = preg_replace('/(#[-.:\\w]*)#.*$/', '$1', $path); # PITS:01388
+  if (is_array($txt)) { # PITS:01392
+    $suffix = $txt[1];
+    $txt = $txt[0];
+  }
   if (!$fmt && $path{0} == '#') {
     $path = preg_replace("/[^-.:\\w]/", '', $path);
-    if (trim($txt) == '+') $txt = PageVar($pagename, '$Title');
+    if (trim($txt) == '+') $txt = PageVar($pagename, '$Title') . @$suffix;
     if ($alt) $alt = " title='$alt'";
     return ($path) ? "<a href='#$path'$alt>".str_replace("$", "&#036;", $txt)."</a>" : '';
   }
@@ -1580,7 +1596,8 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
              ? $LinkPageSelfFmt : $LinkPageExistsFmt;
   }
   $url = PageVar($tgtname, '$PageUrl');
-  if (trim($txt) == '+') $txt = PageVar($tgtname, '$Title');
+  if (trim($txt) == '+') $txt = PageVar($tgtname, 
+    IsEnabled($EnableLinkPlusTitlespaced, 0) ? '$Titlespaced' : '$Title') . @$suffix;
   $txt = str_replace("$", "&#036;", $txt);
   if (@$EnableLinkPageRelative)
     $url = preg_replace('!^[a-z]+://[^/]*!i', '', $url);
@@ -1609,7 +1626,10 @@ function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
         $txt = preg_replace('!^.*[^<]/!', '', $txt);
       }
     }
-    $txt .= $suffix;
+    if ($m[1]=='<:page>' && trim($txt) == '+' && $suffix>'') { # PITS:01392
+      $txt = array(trim($txt), $suffix);
+    }
+    else $txt .= $suffix;
   }
   if (@$LinkTitleFunction) $m[4] = $LinkTitleFunction($pagename,$m,$txt);
   $out = $LinkFunctions[$m[1]]($pagename,$m[1],$m[2],@$m[4],$txt,$fmt);
@@ -1860,7 +1880,7 @@ function SaveAttributes($pagename,&$page,&$new) {
   if (!$EnablePost) return;
   $text = PPRA($SaveAttrPatterns, $new['text']);
   $LinkTargets = array();
-  $html = MarkupToHTML($pagename,$text);
+  $new['=html'] = MarkupToHTML($pagename,$text);
   $new['targets'] = implode(',',array_keys((array)$LinkTargets));
   $p = & $PCache[$pagename];
   foreach((array)$SaveProperties as $k) {
@@ -2120,9 +2140,9 @@ function IsAuthorized($chal, $source, &$from) {
         if (@$AuthList[$pw]) $auth = $AuthList[$pw];
         continue;
       }
-      if (pmcrypt($AllowPassword, $pw) == $pw)           # nopass
+      if ($AllowPassword && pmcrypt($AllowPassword, $pw) == $pw) # nopass
         { $auth=1; continue; }
-      foreach((array)$AuthPw as $pwresp)                       # password
+      foreach((array)$AuthPw as $pwresp)                         # password
         if (pmcrypt($pwresp, $pw) == $pw) { $auth=1; continue; }
     }
   }
