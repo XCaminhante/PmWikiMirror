@@ -55,8 +55,8 @@ Markup_e('{$var}', '>$[phrase]',
   "PRR(PVSE(PageVar(\$pagename, \$m[2], \$m[1])))");
 
 # invisible (:textvar:...:) definition
-Markup('textvar:', '<split',
-  '/\\(: *\\w[-\\w]* *:(?!\\)).*?:\\)/s', '');
+Markup('textvar:', '<if',
+  '/\\(: *\\w[-\\w]* *:(?!\\))((?!\\(:).)*?(:\\))/s', '');
 
 ## handle relative text vars in includes
 if (IsEnabled($EnableRelativePageVars, 1)) 
@@ -455,9 +455,8 @@ Markup('^>><<', '<^>>',
 ## (:markup:) for displaying markup examples
 function MarkupMarkup($pagename, $text, $opt = '') {
   global $MarkupWordwrapFunction, $MarkupWrapTag;
-  SDV($MarkupWordwrapFunction, 
-    PCCF('return str_replace("  ", " &nbsp;", nl2br($m));'));
-  SDV($MarkupWrapTag, 'code');
+  SDV($MarkupWordwrapFunction, 'IsEnabled');
+  SDV($MarkupWrapTag, 'pre');
   $MarkupMarkupOpt = array('class' => 'vert');
   $opt = array_merge($MarkupMarkupOpt, ParseArgs($opt));
   $html = MarkupToHTML($pagename, $text, array('escape' => 0));
@@ -493,6 +492,7 @@ SDV($HTMLStylesFmt['markup'], "
   div.faqtoc div.faq p.question 
     { display:block; font-weight:normal; margin:0.5em 0 0.5em 20px; line-height:normal; }
   div.faqtoc div.faq p.question * { display:inline; }
+  td.markup1 pre { white-space: pre-wrap; }
   ");
 
 #### Special conditions ####

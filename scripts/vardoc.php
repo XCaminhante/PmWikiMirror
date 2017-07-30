@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2002-2016 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2002-2017 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -16,9 +16,9 @@
 */
 
 SDV($VarPagesFmt,array('$[PmWiki.Variables]'));
-Markup_e('varlink','<wikilink',"/\\$($WikiWordPattern|Author|Skin|pagename)\\b/",
+Markup_e('varlink','<wikilink',"/\\$($WikiWordPattern|Author|Skin|pagename|Version)\\b/",
   "Keep(VarLink(\$pagename,\$m[1],'$'.\$m[1]))");
-Markup('vardef','<links',"/^:\\$($WikiWordPattern|Author|Skin|pagename):/",
+Markup('vardef','<links',"/^:\\$($WikiWordPattern|Author|Skin|pagename|Version) *:/",
   ':[[#$1]]$$1:');
 Markup_e('varindex', 'directives',
   '/\\(:varindex:\\)/i',
@@ -32,10 +32,9 @@ function VarLink($pagename,$tgt,$txt) {
   SDV($VarLinkExistsFmt,"<a class='varlink' href='\$LinkUrl'><code class='varlink'>\$LinkText</code></a>");
   VarIndexLoad($pagename);
   $FmtV['$LinkText'] = str_replace('$', '&#36;', $txt);
-  $FmtV['$LinkUrl'] = @$VarIndex[$tgt]['url'];
-  if (@!$VarIndex[$tgt]['url'])
+  if (@!$VarIndex[$tgt]['pagename'])
     return FmtPageName($VarLinkMissingFmt,$pagename);
-  return FmtPageName($VarLinkExistsFmt,$pagename);
+  return MakeLink($pagename,"{$VarIndex[$tgt]['pagename']}#$tgt",$txt,null,$VarLinkExistsFmt);
 }
 
 function VarIndexLoad($pagename) {
@@ -55,7 +54,7 @@ function VarIndexLoad($pagename) {
     foreach($vlist as $vname) {
       $vpage = ReadPage($vname, READPAGE_CURRENT); @$loaded[$vname]++;
       if (!$vpage) continue;
-      if (!preg_match_all("/\n:\\$([[:upper:]]\\w+|pagename):/",@$vpage['text'],$match))
+      if (!preg_match_all("/\n:\\$([[:upper:]]\\w+|pagename) *:/",@$vpage['text'],$match))
         continue;
       foreach($match[1] as $n) {
         $tmp[$n]['pagename'] = $vname;

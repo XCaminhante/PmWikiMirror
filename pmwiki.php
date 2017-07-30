@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2016 Patrick R. Michaud
+    Copyright 2001-2017 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -157,7 +157,7 @@ $FmtPV = array(
 $SaveProperties = array('title', 'description', 'keywords');
 $PageTextVarPatterns = array(
   'var:'        => '/^(:*[ \\t]*(\\w[-\\w]*)[ \\t]*:[ \\t]?)(.*)($)/m',
-  '(:var:...:)' => '/(\\(: *(\\w[-\\w]*) *:(?!\\))\\s?)(.*?)(:\\))/s'
+  '(:var:...:)' => '/(\\(: *(\\w[-\\w]*) *:(?!\\))\\s?)((?:(?!\\(:).)*?)(:\\))/s' # PITS:01300
   );
 
 
@@ -322,7 +322,9 @@ if (!$pagename &&
 if (preg_match('/[\\x80-\\xbf]/',$pagename)) 
   $pagename=utf8_decode($pagename);
 $pagename = preg_replace('![^[:alnum:]\\x80-\\xff]+$!','',$pagename);
-$FmtPV['$RequestedPage'] = "'".PHSC($pagename, ENT_QUOTES)."'";
+$pagename_unfiltered = $pagename;
+$pagename = preg_replace('![${}\'"\\\\]+!', '', $pagename);
+$FmtPV['$RequestedPage'] = 'PHSC($GLOBALS["pagename_unfiltered"], ENT_QUOTES)';
 $Cursor['*'] = &$pagename;
 if (function_exists("date_default_timezone_get") ) { # fix PHP5.3 warnings
   @date_default_timezone_set(@date_default_timezone_get());
@@ -356,7 +358,7 @@ foreach((array)$InterMapFiles as $f) {
   $f = FmtPageName($f, $pagename);
   if (($v = @file($f))) 
     $v = preg_replace('/^\\s*(?>\\w[-\\w]*)(?!:)/m', '$0:', implode('', $v));
-  else if (PageExists($f)) {
+  else if (@PageExists($f)) {
     $p = ReadPage($f, READPAGE_CURRENT);
     $v = $p['text'];
   } else continue;
@@ -455,9 +457,9 @@ function ParseArgs($x, $optpat = '(?>(\\w+)[:=])') {
 }
 function PHSC($x, $flags=ENT_COMPAT, $enc=null, $dbl_enc=true) { # for PHP 5.4
   if (is_null($enc)) $enc = "ISO-8859-1"; # single-byte charset
-  if (! is_array($x)) return htmlspecialchars($x, $flags, $enc, $dbl_enc);
+  if (! is_array($x)) return @htmlspecialchars($x, $flags, $enc, $dbl_enc);
   foreach($x as $k=>$v) $x[$k] = PHSC($v, $flags, $enc, $dbl_enc);
-  return $x;  
+  return $x;
 }
 function PCCF($code, $template = 'default', $args = '$m') {
   global $CallbackFnTemplates, $CallbackFunctions;
@@ -708,7 +710,7 @@ function ResolvePageName($pagename) {
   global $DefaultPage, $DefaultGroup, $DefaultName,
     $GroupPattern, $NamePattern, $EnableFixedUrlRedirect;
   SDV($DefaultPage, "$DefaultGroup.$DefaultName");
-  $pagename = preg_replace('!([./][^./]+)\\.html$!', '$1', $pagename);
+  $pagename = preg_replace('!([./][^./]+)\\.html?$!', '$1', $pagename);
   if ($pagename == '') return $DefaultPage;
   $p = MakePageName($DefaultPage, $pagename);
   if (!preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $p)) {
@@ -882,7 +884,7 @@ function FmtPageName($fmt, $pagename) {
   $fmt = PPRE("/(?:$pvpat)\\b/", "PageVar('$pagename', \$m[0])", $fmt);
   $fmt = PPRE('!\\$ScriptUrl/([^?#\'"\\s<>]+)!',
     (@$EnablePathInfo) ? "'$ScriptUrl/'.PUE(\$m[1])" :
-        "'$ScriptUrl?n='.str_replace('/','.',PUE(\$m[1]))",
+        "'$ScriptUrl?n='.str_replace('/','.',PUE(\$m[1]))", 
     $fmt);
   if (strpos($fmt,'$')===false) return $fmt;
   static $g;
@@ -993,9 +995,6 @@ class PageStore {
   var $recodefn;
   var $u8decode;
   var $u8encode;
-  public function __construct($d='$WorkDir/$FullName', $w=0, $a=NULL) {
-    $this->PageStore($d, $w, $a);
-  }
   function PageStore($d='$WorkDir/$FullName', $w=0, $a=NULL) { 
     $this->dirfmt = $d; $this->iswrite = $w; $this->attr = (array)$a;
     $GLOBALS['PageExistsCache'] = array();
@@ -1007,6 +1006,9 @@ class PageStore {
     else $this->recodefn = false;
     $this->u8decode = create_function('$s,$from,$to', 'return utf8_decode($s);');
     $this->u8encode = create_function('$s,$from,$to', 'return utf8_encode($s);');
+  }
+  function __construct($d='$WorkDir/$FullName', $w=0, $a=NULL) {
+    $this->PageStore($d, $w, $a);
   }
   function pagefile($pagename) {
     global $FarmD;
@@ -1064,7 +1066,7 @@ class PageStore {
     return $this->recode($pagename, @$page);
   }
   function write($pagename,$page) {
-    global $Now, $Version, $Charset, $EnableRevUserAgent;
+    global $Now, $Version, $Charset, $EnableRevUserAgent, $PageExistsCache;
     $page['charset'] = $Charset;
     $page['name'] = $pagename;
     $page['time'] = $Now;
@@ -1098,6 +1100,7 @@ class PageStore {
     if (!$s)
       Abort("Cannot write page to $pagename ($pagefile)...changes not saved");
     PCache($pagename, $page);
+    unset($PageExistsCache[$pagename]); # PITS:01401
   }
   function exists($pagename) {
     if (!$pagename) return false;
@@ -1105,9 +1108,10 @@ class PageStore {
     return ($pagefile && file_exists($pagefile));
   }
   function delete($pagename) {
-    global $Now;
+    global $Now, $PageExistsCache;
     $pagefile = $this->pagefile($pagename);
     @rename($pagefile,"$pagefile,del-$Now");
+    unset($PageExistsCache[$pagename]); # PITS:01401
   }
   function ls($pats=NULL) {
     global $GroupPattern, $NamePattern;
@@ -1395,7 +1399,7 @@ function IncludeText($pagename, $inclspec) {
   global $MaxIncludes, $IncludeOpt, $InclCount, $PCache;
   SDV($MaxIncludes,50);
   SDVA($IncludeOpt, array('self'=>1));
-  if ($InclCount++>=$MaxIncludes) return Keep($inclspec);
+  if ($InclCount[$pagename]++>=$MaxIncludes) return Keep($inclspec);
   $args = array_merge($IncludeOpt, ParseArgs($inclspec));
   while (count($args['#'])>0) {
     $k = array_shift($args['#']); $v = array_shift($args['#']);
@@ -1688,8 +1692,10 @@ function BuildMarkupRules() {
   if (!$MarkupRules) {
     uasort($MarkupTable,'mpcmp');
     foreach($MarkupTable as $id=>$m) 
-      if (@$m['pat'] && @$m['seq']) 
-        $MarkupRules[str_replace('\\L',$LinkPattern,$m['pat'])]=$m['rep'];
+      if (@$m['pat'] && @$m['seq']) {
+        $MarkupRules[str_replace('\\L',$LinkPattern,$m['pat'])]
+          = array($m['rep'], $id);
+      }
   }
   return $MarkupRules;
 }
@@ -1713,6 +1719,8 @@ function MarkupToHTML($pagename, $text, $opt = NULL) {
     $RedoMarkupLine=0;
     $markrules = BuildMarkupRules();
     foreach($markrules as $p=>$r) {
+      list($r, $id) = (array)$r;
+      $MarkupToHTML['markupid'] = $id;
       if ($p{0} == '/') {
         if (is_callable($r)) $x = preg_replace_callback($p,$r,$x);
         else $x=preg_replace($p,$r,$x);
@@ -1862,16 +1870,20 @@ function RestorePage($pagename,&$page,&$new,$restore=NULL) {
 ## patterns held in $ROSPatterns are replaced only when the page
 ## is being posted (as signaled by $EnablePost).
 function ReplaceOnSave($pagename,&$page,&$new) {
-  global $EnablePost, $ROSPatterns, $ROEPatterns, $EnableROSEscape;
-  $t = $new['text'];
-  if (IsEnabled($EnableROSEscape, 0)) $t = MarkupEscape($t);
-  $t = PPRA((array)@$ROEPatterns, $t);
+  global $EnablePost, $ROSPatterns, $ROEPatterns;
+  $new['text'] = ProcessROESPatterns($new['text'], $ROEPatterns);
   if ($EnablePost) {
-    $t = PPRA((array)@$ROSPatterns, $t);
+    $new['text'] = ProcessROESPatterns($new['text'], $ROSPatterns);
   }
-  if (IsEnabled($EnableROSEscape, 0)) $t = MarkupRestore($t);
-  $new['=preview'] = $new['text'] = $t;
+  $new['=preview'] = $new['text'];
   PCache($pagename, $new);
+}
+function ProcessROESPatterns($text, $patterns) {
+  global $EnableROSEscape;
+  if (IsEnabled($EnableROSEscape, 0)) $text = MarkupEscape($text);
+  $text = PPRA((array)@$patterns, $text);
+  if (IsEnabled($EnableROSEscape, 0)) $text = MarkupRestore($text);
+  return $text;
 }
 
 function SaveAttributes($pagename,&$page,&$new) {
@@ -1961,15 +1973,16 @@ function AutoCreateTargets($pagename, &$page, &$new) {
     }
   }
 }
-    
+
 function PreviewPage($pagename,&$page,&$new) {
-  global $IsPageSaved, $FmtV;
+  global $IsPageSaved, $FmtV, $ROSPatterns;
   if (@$_REQUEST['preview']) {
-    $text = '(:groupheader:)'.$new['text'].'(:groupfooter:)';
+    $text = ProcessROESPatterns($new['text'], $ROSPatterns);
+    $text = '(:groupheader:)'.$text.'(:groupfooter:)';
     $FmtV['$PreviewText'] = MarkupToHTML($pagename,$text);
-  } 
+  }
 }
-  
+
 function HandleEdit($pagename, $auth = 'edit') {
   global $IsPagePosted, $EditFields, $ChangeSummary, $EditFunctions, 
     $EnablePost, $FmtV, $Now, $EditRedirectFmt, 
