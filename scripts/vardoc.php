@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2002-2017 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2002-2018 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -16,13 +16,22 @@
 */
 
 SDV($VarPagesFmt,array('$[PmWiki.Variables]'));
-Markup_e('varlink','<wikilink',"/\\$($WikiWordPattern|Author|Skin|pagename|Version)\\b/",
-  "Keep(VarLink(\$pagename,\$m[1],'$'.\$m[1]))");
 Markup('vardef','<links',"/^:\\$($WikiWordPattern|Author|Skin|pagename|Version) *:/",
   ':[[#$1]]$$1:');
-Markup_e('varindex', 'directives',
-  '/\\(:varindex:\\)/i',
-  "Keep(VarIndexList(\$pagename))");
+Markup('varlink','<wikilink',"/\\$($WikiWordPattern|Author|Skin|pagename|Version)\\b/",
+  "MarkupVarLinkIndex");
+Markup('varindex', 'directives',
+  '/\\(:varindex:\\)/i', "MarkupVarLinkIndex");
+
+function MarkupVarLinkIndex($m) {
+  extract($GLOBALS["MarkupToHTML"]); # get $pagename, $markupid
+  switch ($markupid) {
+    case 'varlink': 
+      return Keep(VarLink($pagename,$m[1],'$'.$m[1]));
+    case 'varindex': 
+      return Keep(VarIndexList($pagename));
+  }
+}
 
 SDVA($HTMLStylesFmt, array('vardoc' => "a.varlink { text-decoration:none;}\n"));
 

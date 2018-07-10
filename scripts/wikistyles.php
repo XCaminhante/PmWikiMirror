@@ -13,14 +13,19 @@ SDV($WikiStylePattern,'%%|%[A-Za-z][-,=:#\\w\\s\'"().]*%');
 ## %% markup
 Markup('%%','style','%','return ApplyStyles($x);');
 
-## %define=...% markup on a line by itself
-Markup_e('%define=', '>split',
-  "/^(?=%define=)((?:$WikiStylePattern)\\s*)+$/",
-  "PZZ(ApplyStyles(\$m[0]))");
-
 ## restore links before applying styles
-Markup_e('restorelinks','<%%',"/$KeepToken(\\d+L)$KeepToken/",
-  '$GLOBALS[\'KPV\'][$m[1]]');
+Markup('restorelinks','<%%',"/$KeepToken(\\d+L)$KeepToken/",
+  'cb_expandkpv');
+
+## %define=...% markup on a line by itself
+Markup('%define=', '>split',
+  "/^(?=%define=)((?:$WikiStylePattern)\\s*)+$/",
+  "MarkupApplyStyles");
+
+function MarkupApplyStyles($m) {
+  ApplyStyles($m[0]);
+  return '';
+}
 
 # define PmWiki's standard/default wikistyles
 if (IsEnabled($EnableStdWikiStyles,1)) {
@@ -82,6 +87,7 @@ if (IsEnabled($EnableStdWikiStyles,1)) {
   ##  preformatted text sections
   SDV($WikiStyle['pre'], array('apply' => 'block', 'white-space' => 'pre'));
   SDV($WikiStyle['sidehead'], array('apply' => 'block', 'class' => 'sidehead'));
+  SDV($WikiStyle['reversed'], array('apply' => 'list', 'reversed' => 'reversed'));
 }
 
 SDVA($WikiStyleAttr,array(
@@ -89,6 +95,7 @@ SDVA($WikiStyleAttr,array(
   'hspace' => 'img',
   'align' => 'img',
   'value' => 'li',
+  'reversed' => 'ol',
   'target' => 'a',
   'accesskey' => 'a',
   'rel' => 'a'));
@@ -110,9 +117,9 @@ function ApplyStyles($x) {
     $WikiStyleAttr, $WikiStyleCSS, $WikiStyleApply, $BlockPattern,
     $WikiStyleTag, $imgTag, $aTag, $spanTag, $WikiStyleAttrPrefix;
   $wt = @$WikiStyleTag; $ns = $WikiStyleAttrPrefix; $ws = '';
-  $x = PPRE("/\\b(href|src)=(['\"]?)[^$UrlExcludeChars]+\\2/",
-                    "Keep(\$m[0])", $x);
-  $x = PPRE("/\\bhttps?:[^$UrlExcludeChars]+/", "Keep(\$m[0])", $x);
+  $x = preg_replace_callback("/\\b(href|src)=(['\"]?)[^$UrlExcludeChars]+\\2/",
+                    "Keep", $x);
+  $x = preg_replace_callback("/\\bhttps?:[^$UrlExcludeChars]+/", "Keep", $x);
   $parts = preg_split("/($WikiStylePattern)/",$x,-1,PREG_SPLIT_DELIM_CAPTURE);
   $parts[] = NULL;
   $out = '';
@@ -122,7 +129,7 @@ function ApplyStyles($x) {
     $p = array_shift($parts);
     if (preg_match("/^$WikiStylePattern\$/",$p)) {
       $WikiStyle['curr']=$style; $style=array();
-      foreach((array)$WikiStyleRepl as $pat=>$rep) 
+      foreach((array)$WikiStyleRepl as $pat=>$rep)
         $p=preg_replace($pat,$rep,$p);
       preg_match_all(
         '/\\b([a-zA-Z][-\\w]*)([:=]([-#,\\w.()%]+|([\'"]).*?\\4))?/',
