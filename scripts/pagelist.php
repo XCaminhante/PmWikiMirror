@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2018 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2019 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -22,7 +22,7 @@
     to FmtPageList.  FmtPageList then returns the output to
     the caller, and calls Keep() (preserves HTML) or PRR() (re-evaluate
     as markup) as appropriate for the output being returned.
-    
+
     Script maintained by Petko YOTOV www.pmwiki.org/petko
 */
 
@@ -33,6 +33,7 @@ if (IsEnabled($EnablePageIndex, 1)) {
 }
 
 SDV($StrFoldFunction, 'strtolower');
+SDV($PageListSortCmpFunction, 'strcasecmp');
 
 ## $SearchPatterns holds patterns for list= option
 SDV($SearchPatterns['all'], array());
@@ -448,24 +449,28 @@ function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
 
 
 function PageListVariables(&$list, &$opt, $pn, &$page) {
+  global $PageListVarFoldFn, $StrFoldFunction;
+  $fold = empty($PageListVarFoldFn)
+    ? $StrFoldFunction : $PageListVarFoldFn;
+
   switch ($opt['=phase']) {
     case PAGELIST_PRE:
       $varlist = preg_grep('/^\\$/', array_keys($opt));
       if (!$varlist) return 0;
       foreach($varlist as $v) {
         list($inclp, $exclp) = GlobToPCRE($opt[$v]);
-        if ($inclp) $opt['=varinclp'][$v] = "/$inclp/i";
-        if ($exclp) $opt['=varexclp'][$v] = "/$exclp/i";
+        if ($inclp) $opt['=varinclp'][$v] = $fold("/$inclp/i");
+        if ($exclp) $opt['=varexclp'][$v] = $fold("/$exclp/i");
       }
       return PAGELIST_ITEM;
 
     case PAGELIST_ITEM:
       if (@$opt['=varinclp'])
         foreach($opt['=varinclp'] as $v => $pat) 
-          if (!preg_match($pat, PageVar($pn, $v))) return 0;
+          if (!preg_match($pat, $fold(PageVar($pn, $v)))) return 0;
       if (@$opt['=varexclp'])
         foreach($opt['=varexclp'] as $v => $pat) 
-           if (preg_match($pat, PageVar($pn, $v))) return 0;
+           if (preg_match($pat, $fold(PageVar($pn, $v)))) return 0;
       return 1;
   }
 }
@@ -521,13 +526,13 @@ function PageListSort(&$list, &$opt, $pn, &$page) {
   StopWatch('PageListSort end');
 }
 function PageListUASort($x,$y) {
-  global $PCache, $PageListSortCmp;
+  global $PCache, $PageListSortCmp, $PageListSortCmpFunction;
   foreach($PCache['=pagelistoptorder'] as $o => $r) {
     $sign = ($r == '-') ? -1 : 1;
     if (@$PageListSortCmp[$o] && is_callable($PageListSortCmp[$o]))
       $c = $PageListSortCmp[$o]($x, $y, $o);
     else 
-      $c = @strcasecmp($PCache[$x][$o],$PCache[$y][$o]);
+      $c = @$PageListSortCmpFunction($PCache[$x][$o],$PCache[$y][$o]);
     if ($c) return $sign*$c;
   }
   return 0;
