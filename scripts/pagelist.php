@@ -85,7 +85,7 @@ XLSDV('en', array(
   'SearchFound' => 
     '$MatchCount pages found out of $MatchSearched pages searched.'));
 
-SDV($PageListArgPattern, '((?:\\$:?)?\\w+)[:=]');
+SDV($PageListArgPattern, '((?:\\$:?)?\\w[-\\w]*)[:=]');
 
 Markup('pagelist', 'directives',
   '/\\(:pagelist(\\s+.*?)?:\\)/i', "MarkupPageList");
@@ -166,13 +166,14 @@ function SearchBox($pagename, $opt) {
     if ($v == '' || is_array($v)) continue;
     $v = str_replace("'", "&#039;", $v);
     $opt[$k] = $v;
-    if(preg_match('/^(q|label|value|size|placeholder)$/', $k)) continue;
+    if(preg_match('/^(q|label|value|size|placeholder|aria-\\w+)$/', $k)) continue;
     $k = str_replace("'", "&#039;", $k);
     $out .= "<input type='hidden' name='$k' value='$v' />";
   }
   SDV($SearchBoxInputType, 'text');
   $out .= "<input type='$SearchBoxInputType' name='q' value='{$opt['value']}' ";
-  if(@$opt['placeholder']) $out .= "  placeholder='{$opt['placeholder']}' ";
+  $attrs = preg_grep('/^(placeholder|aria-\\w+)/', array_keys($opt));
+  foreach ($attrs as $k) $out .= "  $k='{$opt[$k]}' ";
   $out .= "  class='inputbox searchbox' size='{$opt['size']}' /><input type='submit' 
     class='inputbutton searchbutton' value='{$opt['label']}' />";
   return '<form '.Keep($out).'</form>';
@@ -232,7 +233,7 @@ function FmtPageList($outfmt, $pagename, $opt) {
   $opt = array_merge($fmtopt, $opt);
   $out = $fmtfn($pagename, $matches, $opt);
   $FmtV['$MatchCount'] = count($matches);
-  if ($outfmt != '$MatchList') 
+  if ($outfmt != '$MatchList')
     { $FmtV['$MatchList'] = $out; $out = FmtPageName($outfmt, $pagename); }
   if ($out[0] == '<') $out = Keep($out);
   return PRR($out);
@@ -434,7 +435,7 @@ function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
           if (preg_match($i, $text)) return 0;
         foreach((array)@$opt['=inclp'] as $i) 
           if (!preg_match($i, $text)) { 
-            if ($i{0} == '$') $reindex[] = $pn;
+            if ($i[0] == '$') $reindex[] = $pn;
             return 0; 
           }
       }
@@ -488,9 +489,9 @@ function PageListSort(&$list, &$opt, $pn, &$page) {
               as $o) {
         $ret |= PAGELIST_POST;
         $r = '+';
-        if ($o{0} == '-') { $r = '-'; $o = substr($o, 1); }
+        if ($o[0] == '-') { $r = '-'; $o = substr($o, 1); }
         $opt['=order'][$o] = $r;
-        if ($o{0} != '$' && 
+        if ($o[0] != '$' &&
             (!isset($PageListSortRead[$o]) || $PageListSortRead[$o]))
           $ret |= PAGELIST_ITEM;
       }
@@ -706,8 +707,9 @@ function FPLTemplateFormat($pagename, $matches, $opt, $tparts, &$output){
   global $Cursor, $FPLTemplateMarkupFunction, $PCache;
   SDV($FPLTemplateMarkupFunction, 'MarkupToHTML');
   $savecursor = $Cursor;
-  $pagecount = $groupcount = $grouppagecount = $traildepth = 0;
+  $pagecount = $groupcount = $grouppagecount = $traildepth = $eachcount = 0;
   $pseudovars = array('{$$PageCount}' => &$pagecount, 
+                      '{$$EachCount}' => &$eachcount, 
                       '{$$GroupCount}' => &$groupcount, 
                       '{$$GroupPageCount}' => &$grouppagecount,
                       '{$$PageTrailDepth}' => &$traildepth);
@@ -719,7 +721,7 @@ function FPLTemplateFormat($pagename, $matches, $opt, $tparts, &$output){
   $vk = array_keys($pseudovars);
   $vv = array_values($pseudovars);
 
-  $lgroup = ''; $out = '';
+  $lgroup = $lcontrol = ''; $out = '';
   if (count($matches)==0) {
     $t = 0;
     while($t < count($tparts)) {
@@ -734,7 +736,7 @@ function FPLTemplateFormat($pagename, $matches, $opt, $tparts, &$output){
     $traildepth = intval(@$PCache[$pn]['depth']);
     $group = PageVar($pn, '$Group');
     if ($group != $lgroup) { $groupcount++; $grouppagecount = 0; $lgroup = $group; }
-    $grouppagecount++; $pagecount++;
+    $grouppagecount++; $pagecount++; $eachcount++;
 
     $t = 0;
     while ($t < count($tparts)) {
@@ -746,8 +748,11 @@ function FPLTemplateFormat($pagename, $matches, $opt, $tparts, &$output){
           if ($when == 'first' && ($neg xor ($i != 0))) continue;
           if ($when == 'last' && ($neg xor ($i != count($matches) - 1))) continue;
         } else {
+          $currcontrol = FPLExpandItemVars($control, $matches, $i, $pseudovars);
+          if($currcontrol != $lcontrol)  { $eachcount=1; $lcontrol = $currcontrol; }
           if ($when == 'first' || !isset($last[$t])) {
             $curr = FPLExpandItemVars($control, $matches, $i, $pseudovars);
+            
             if ($when == 'first' && ($neg xor (($i != 0) && ($last[$t] == $curr))))
               { $last[$t] = $curr; continue; }
             $last[$t] = $curr;

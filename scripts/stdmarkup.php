@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2018 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2019 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -217,7 +217,7 @@ function MarkupDirectives($m) {
     case 'linkwikiwords':  return PZZ($GLOBALS['LinkWikiWords']=($m[1]!='no'));
     case 'spacewikiwords': return PZZ($GLOBALS['SpaceWikiWords']=($m[1]!='no'));
     case 'linebreaks': 
-      return PZZ($GLOBALS['HTMLPNewline'] = ($m[1]!='no') ? '<br  />' : '');
+      return PZZ($GLOBALS['HTMLPNewline'] = (@$m[1]!='no') ? '<br  />' : '');
     case 'messages': 
       return '<:block>'.Keep(FmtPageName(
         implode('',(array)$GLOBALS['MessagesFmt']), $pagename));
@@ -407,7 +407,7 @@ Markup('blank', '<block', '/^\\s+$/', '');
 
 ## process any <:...> markup (after all other block markups)
 Markup('^<:','>block','/^(?=\\s*\\S)(<:([^>]+)>)?/',"MarkupBlock");
-function MarkupBlock($m) {return Block($m[2]);}
+function MarkupBlock($m) {return Block(@$m[2]);}
 
 ## unblocked lines w/block markup become anonymous <:block>
 Markup('^!<:', '<^<:',
@@ -481,7 +481,7 @@ Markup('^A:', 'block', '/^A:/', Keep(''));
 function MarkupTables($m) {
   extract($GLOBALS["MarkupToHTML"]);
   switch ($markupid) {
-    case 'table': return Cells($m[1],$m[2]);
+    case 'table': return Cells(@$m[1],@$m[2]);
     case '^||||': return FormatTableRow($m[0]);
     case '^||':
       $GLOBALS['BlockMarkups']['table'][0] = '<table '.SimpleTableAttr($m[1]).'>';
@@ -499,7 +499,7 @@ Markup('^||','>^||||','/^\\|\\|(.*)$/',
 
 #### (:table:) markup (AdvancedTables)
 Markup('table', '<block',
-  '/^\\(:(table|cell|cellnr|head|headnr|tableend|(?:div\\d*|section\\d*|article\\d*|header|footer|nav|address|aside)(?:end)?)(\\s.*?)?:\\)/i',
+  '/^\\(:(table|cell|cellnr|head|headnr|tableend|(?:div\\d*|section\\d*|details\\d*|article\\d*|header|footer|nav|address|aside)(?:end)?)(\\s.*?)?:\\)/i',
   "MarkupTables");
 Markup('^>>', '<table',
   '/^&gt;&gt;(.+?)&lt;&lt;(.*)$/',
@@ -541,7 +541,11 @@ function Cells($name,$attr) {
     $cf['cell'] = "</$t>";
   } else {
     $tag = preg_replace('/\\d+$/', '', $key);
-    $out .= "<$tag $attr>";
+    $tmp = "<$tag $attr>";
+    if ($tag == 'details') { 
+      $tmp = preg_replace("#(<details.*) summary='(.*?)'(.*)$#", '$1$3<summary>$2</summary>', $tmp);
+    }
+    $out .= $tmp;
     $cf[$key] = "</$tag>";
   }
   return $out;
@@ -636,4 +640,42 @@ function CondDate($condparm) {
 # pattern.
 SDV($ROSPatterns['/\\(:encrypt\\s+([^\\s:=]+).*?:\\)/'], 'cb_encrypt');
 function cb_encrypt($m) { return pmcrypt($m[1]);}
+
+# Table of contents, based on Cookbook:AutoTOC by Petko Yotov
+SDVA($PmTOC, array(
+  'Enable' => 0,
+  'MaxLevel' => 6,
+  'MinNumber' => 3,
+  'ParentElement'=>'',
+  'NumberedHeadings'=>'',
+  'EnableBacklinks'=>0,
+  'EnableQMarkup' => 0,
+  'contents' => XL('Contents'),
+  'hide' => XL('hide'),
+  'show' => XL('show'),
+));
+
+if ($action!='browse') $PmTOC['Enable'] = 0;
+
+Markup("PmTOC", 'directives', '/^\\(:[#*]?(?:toc|tdm).*?:\\)\\s*$/im', 'FmtPmTOC');
+Markup("noPmTOC", 'directives', '/\\(:(no)(?:toc|tdm).*?:\\)/im', 'FmtPmTOC');
+function FmtPmTOC($m) {
+  if ($m[1]) return Keep('<span class="noPmTOC"></span>');
+  return "<:block,1>".Keep("<div class='PmTOCdiv'></div>");
+}
+SDV($HTMLStylesFmt['PmTOC'], '.noPmTOC {display:none;}
+.PmTOCdiv { display: inline-block; font-size: 13px; overflow: auto; max-height: 500px;}
+.PmTOCdiv a { text-decoration: none;}
+.back-arrow {font-size: .9em; text-decoration: none;}
+#PmTOCchk + label {cursor: pointer;}
+#PmTOCchk {display: none;}
+#PmTOCchk:not(:checked) + label > .show {display: none;}
+#PmTOCchk:checked + label > .hide {display: none;}
+#PmTOCchk:checked + label + div {display: none;}');
+
+SDV($HTMLStylesFmt['PmSortable'], 'table.sortable th { cursor: pointer; }
+table.sortable th::after { color: transparent; content: "\00A0\025B8"; }
+table.sortable th:hover::after { color: inherit; content: "\00A0\025B8"; }
+table.sortable th.dir-u::after { color: inherit; content: "\00A0\025BE"; }
+table.sortable th.dir-d::after { color: inherit; content: "\00A0\025B4"; }');
 

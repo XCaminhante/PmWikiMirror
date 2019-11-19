@@ -11,8 +11,10 @@
 # $InputAttrs are the attributes we allow in output tags
 SDV($InputAttrs, array('name', 'value', 'id', 'class', 'rows', 'cols', 
   'size', 'maxlength', 'action', 'method', 'accesskey', 'tabindex', 'multiple',
-  'checked', 'disabled', 'readonly', 'enctype', 'src', 'alt', 'title',
-  'required', 'placeholder', 'autocomplete', 'min', 'max', 'step', 'pattern'
+  'checked', 'disabled', 'readonly', 'enctype', 'src', 'alt', 'title', 'list',
+  'required', 'placeholder', 'autocomplete', 'min', 'max', 'step', 'pattern',
+  'role', 'aria-label', 'aria-labelledby', 'aria-describedby',
+  'aria-expanded', 'aria-pressed', 'aria-current', 'aria-hidden',
   ));
 
 # Set up formatting for text, submit, hidden, radio, etc. types
@@ -61,6 +63,14 @@ SDVA($InputTags['select'], array(
   'class' => 'inputbox',
   ':html' => "<select \$InputSelectArgs>\$InputSelectOptions</select>"));
 
+# (:input datalist:)
+SDVA($InputTags['datalist-option'], array(
+  ':args' => array('id', 'value'),
+  ':attr' => array('value'),
+  ':html' => "<option \$InputFormArgs>"));
+SDVA($InputTags['datalist'], array(
+  ':html' => "<datalist \$InputSelectArgs>\$InputSelectOptions</datalist>"));
+
 # (:input defaults?:)
 SDVA($InputTags['default'], array(':fn' => 'InputDefault'));
 SDVA($InputTags['defaults'], array(':fn' => 'InputDefault'));
@@ -75,6 +85,11 @@ Markup('input-select', '<input',
   '/\\(:input\\s+select\\s.*?:\\)(?:\\s*\\(:input\\s+select\\s.*?:\\))*/i',
   "MarkupInputForms");
 
+##  (:input datalist:) has its own markup processing
+Markup('input-datalist', '<input',
+  '/\\(:input\\s+datalist\\s.*?:\\)(?:\\s*\\(:input\\s+datalist\\s.*?:\\))*/i',
+  "MarkupInputForms");
+
 function MarkupInputForms($m) {
   extract($GLOBALS["MarkupToHTML"]); # get $pagename, $markupid
   switch ($markupid) {
@@ -82,6 +97,8 @@ function MarkupInputForms($m) {
       return InputMarkup($pagename, $m[1], $m[2]);
     case 'input-select': 
       return InputSelect($pagename, 'select', $m[0]);
+    case 'input-datalist': 
+      return InputSelect($pagename, 'datalist', $m[0]);
     case 'e_preview': 
       return isset($GLOBALS['FmtV']['$PreviewText']) 
         ? Keep($GLOBALS['FmtV']['$PreviewText']): '';
@@ -91,7 +108,7 @@ function MarkupInputForms($m) {
 ##  The 'input+sp' rule combines multiple (:input select ... :)
 ##  into a single markup line (to avoid split line effects)
 Markup('input+sp', '<split', 
-  '/(\\(:input\\s+select\\s(?>.*?:\\)))\\s+(?=\\(:input\\s)/', '$1');
+  '/(\\(:input\\s+(select|datalist)\\s(?>.*?:\\)))\\s+(?=\\(:input\\s)/', '$1');
 
 SDV($InputFocusFmt, 
   "<script language='javascript' type='text/javascript'><!--
@@ -342,11 +359,13 @@ Markup('e_guibuttons', 'directives', '/\\(:e_guibuttons:\\)/', '');
 # participating in text rendering step.
 SDV($SaveAttrPatterns['/\\(:e_(preview|guibuttons):\\)/'], ' ');
 
+$TextScrollTop = intval(@$_REQUEST['textScrollTop']);
 SDVA($InputTags['e_form'], array(
   ':html' => "<form action='{\$PageUrl}?action=edit' method='post'
     \$InputFormArgs><input type='hidden' name='action' value='edit' 
     /><input type='hidden' name='n' value='{\$FullName}' 
     /><input type='hidden' name='basetime' value='\$EditBaseTime' 
+    /><input type='hidden' name='textScrollTop' id='textScrollTop' value='$TextScrollTop'
     />"));
 SDVA($InputTags['e_textarea'], array(
   ':html' => "<textarea \$InputFormArgs 
@@ -386,3 +405,17 @@ SDVA($InputTags['e_resetbutton'], array(
   ':html' => "<input type='reset' \$InputFormArgs />",
   'value' => ' '.XL('Reset').' '));
 
+if(IsEnabled($EnablePostAuthorRequired))
+  $InputTags['e_author']['required'] = 'required';
+
+if(IsEnabled($EnableNotSavedWarning)) {
+  $is_preview = @$_REQUEST['preview'] ? 'class="preview"' : '';
+  $InputTags['e_form'][':html'] .=
+    "<input type='hidden' id='EnableNotSavedWarning'
+      value=\"$[Content was modified, but not saved!]\" $is_preview />";
+}
+
+if(IsEnabled($EnableEditAutoText)) {
+  $InputTags['e_form'][':html'] .=
+    "<input type='hidden' id='EnableEditAutoText' />";
+}
