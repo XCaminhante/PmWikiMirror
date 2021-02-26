@@ -1,7 +1,7 @@
 <?php
 /*
     PmWiki
-    Copyright 2001-2019 Patrick R. Michaud
+    Copyright 2001-2021 Patrick R. Michaud
     pmichaud@pobox.com
     http://www.pmichaud.com/
 
@@ -40,6 +40,7 @@ if (ini_get('register_globals'))
     ${$k}=''; unset(${$k}); 
   }
 $UnsafeGlobals = array_keys($GLOBALS); $GCount=0; $FmtV=array();
+$FmtV['$TokenName'] = 'pmtoken';
 SDV($FarmD,dirname(__FILE__));
 SDV($WorkDir,'wiki.d');
 define('PmWiki',1);
@@ -66,7 +67,7 @@ $TimeISOZFmt = '%Y-%m-%dT%H:%M:%SZ';
 $MessagesFmt = array();
 $BlockMessageFmt = "<h3 class='wikimessage'>$[This post has been blocked by the administrator]</h3>";
 $EditFields = array('text');
-$EditFunctions = array('EditTemplate', 'RestorePage', 'ReplaceOnSave',
+$EditFunctions = array('AutoCheckToken', 'EditTemplate', 'RestorePage', 'ReplaceOnSave',
   'SaveAttributes', 'PostPage', 'PostRecentChanges', 'AutoCreateTargets',
   'PreviewPage');
 $EnablePost = 1;
@@ -282,7 +283,7 @@ Markup('closeall', '_begin',
   '/^\\(:closeall:\\)$/', "MarkupMarkupClose");
 function MarkupMarkupClose() { return '<:block>' . MarkupClose(); }
 
-$ImgExtPattern="\\.(?:gif|jpg|jpeg|png|svgz?|GIF|JPG|JPEG|PNG|SVGZ?)";
+$ImgExtPattern="\\.(?:gif|jpg|jpeg|a?png|svgz?|GIF|JPG|JPEG|A?PNG|SVGZ?|webp|WEBP)";
 $ImgTagFmt="<img src='\$LinkUrl' alt='\$LinkAlt' title='\$LinkAlt' />";
 
 $BlockMarkups = array(
@@ -368,7 +369,9 @@ if (isset($PostConfig) && is_array($PostConfig)) {
 }
 
 function pmsetcookie($name, $val="", $exp=0, $path="", $dom="", $secure=null, $httponly=null) {
-  global $EnableCookieSecure, $EnableCookieHTTPOnly;
+  global $EnableCookieSecure, $EnableCookieHTTPOnly, $SetCookieFunction;
+  if(IsEnabled($SetCookieFunction))
+    return $SetCookieFunction($name, $val, $exp, $path, $dom, $secure, $httponly);
   if (is_null($secure))   $secure   = IsEnabled($EnableCookieSecure,   false);
   if (is_null($httponly)) $httponly = IsEnabled($EnableCookieHTTPOnly, false);
   setcookie($name, $val, $exp, $path, $dom, $secure, $httponly);
@@ -420,7 +423,7 @@ function HandleDispatch($pagename, $action, $msg=NULL) {
   global $MessagesFmt, $HandleActions, $HandleAuth;
   if ($msg) $MessagesFmt[] = "<div class='wikimessage'>$msg</div>";
   $fn = $HandleActions[$action];
-  $auth = $HandleAuth[$action];
+  $auth = @$HandleAuth[$action];
   if (!$auth) $auth = 'read';
   return $fn($pagename, $auth);
 }
@@ -448,14 +451,16 @@ function PRR($x=NULL)
 function PUE($x)
   { return preg_replace_callback('/[\\x80-\\xff \'"<>]/', "cb_pue", $x); }
 function cb_pue($m) { return '%'.dechex(ord($m[0])); }
-function PQA($x) { 
+function PQA($x, $keep=true) { 
   $out = '';
   if (preg_match_all('/([a-zA-Z][-\\w]*)\\s*=\\s*("[^"]*"|\'[^\']*\'|\\S*)/',
                      $x, $attr, PREG_SET_ORDER)) {
     foreach($attr as $a) {
       if (preg_match('/^on/i', $a[1])) continue;
       $val = preg_replace('/^([\'"]?)(.*)\\1$/', '$2', $a[2]);
-      $val = str_replace("'", '&#39;', $val);
+      if ($keep) $val = Keep(PHSC($val, ENT_QUOTES));
+      else $val = str_replace("'", '&#39;', $val);
+      
       $out .= "{$a[1]}='$val' ";
     }
   }
@@ -496,7 +501,7 @@ function PCCF($code, $template = 'default', $args = '$m') {
     Abort("No \$CallbackFnTemplates[$template]).");
   $code = sprintf($CallbackFnTemplates[$template], $code);
   if (!isset($CallbackFunctions[$code])) {
-    $fn = create_function($args, $code);
+    $fn = create_function($args, $code); # called by old addon|skin|recipe needing update, see pmwiki.org/Troubleshooting
     if ($fn) $CallbackFunctions[$code] = $fn;
     else StopWatch("Failed to create callback function: ".PHSC($code));
   }
@@ -510,7 +515,7 @@ function PPRA($array, $x) {
   foreach((array)$array as $pat => $rep) {
     $fmt = $x; # for $FmtP
     if (is_callable($rep) && $rep != '_') $x = preg_replace_callback($pat,$rep,$x);
-    else $x = preg_replace($pat,$rep,$x);
+    else $x = preg_replace($pat,$rep,$x);# simple text OR called by old addon|skin|recipe needing update, see pmwiki.org/Troubleshooting
   }
   return $x;
 }
@@ -540,6 +545,39 @@ function pmcrypt($str, $salt=null) {
   if (function_exists('password_hash'))
     return password_hash($str, PASSWORD_DEFAULT);
   return crypt($str);
+}
+
+# generate or check a random one-time token to prevent CSRF
+function pmtoken($token = null) {
+  global $SessionMaxTokens, $PmTokenFn;
+  if(IsEnabled($PmTokenFn) && function_exists($PmTokenFn))
+    return $PmTokenFn($token);
+  @session_start();
+  if(!isset($_SESSION['pmtokens'])) $_SESSION['pmtokens'] = array();
+  if(is_null($token)) { # create a one-time token
+    $len = mt_rand(20,30);
+    $token = "";
+    while(strlen($token)<$len) {
+      $token .= chr(mt_rand(32,126));
+    }
+    if(count($_SESSION['pmtokens']))
+      $id = max(array_keys($_SESSION['pmtokens']))+1;
+    else $id = 0;
+    $_SESSION['pmtokens'][$id] = $token;
+    if(IsEnabled($SessionMaxTokens, 0)) {
+      $max = $SessionMaxTokens;
+      $_SESSION['pmtokens'] = array_slice($_SESSION['pmtokens'], -$max, $max, true);
+    }
+    return "$id:" . md5($token);
+  }
+  # else: check a token, if correct, delete it
+  @list($id, $hash) = explode(':', $token);
+  $id = intval($id);
+  if(isset($_SESSION['pmtokens'][$id]) && $hash == md5($_SESSION['pmtokens'][$id])) {
+    unset($_SESSION['pmtokens'][$id]);
+    return true;
+  }
+  return false;
 }
 
 function StopWatch($x) { 
@@ -613,6 +651,30 @@ function DRange($when) {
   $t0 = strtotime($when);
   $t1 = strtotime("+1 day", $t0);
   return array($t0, $t1);
+}
+
+## DiffTimeCompact subtracts 2 timestamps and outputs a compact
+## human-readable delay in hours, days, weeks, months or years
+function DiffTimeCompact($time, $time2=null, $precision=1) {
+  if(is_null($time2)) $time2 = $GLOBALS['Now'];
+  $suffix = explode(',', XL('h,d,w,m,y'));
+  $x = $hours = abs($time2 - $time)/3600;
+  if($x<24) return round($x,$precision).$suffix[0];
+  $x /= 24;   if($x<14) return round($x,$precision).$suffix[1];
+  $x /= 7;    if($x< 9) return round($x,$precision).$suffix[2];
+  $x = $hours/2/365.2425; if($x<24) return round($x,$precision).$suffix[3];
+  return round($hours/24/365.2425,$precision).$suffix[4];
+}
+
+## FileSizeCompact outputs a human readable file size
+## with an appropriate suffix.
+## Note: unreliable filemtime()/stat() over 2GB @ 32bit
+function FileSizeCompact($n, $precision=1) {
+  if(!(float)$n) return 0;
+  $units = 'bkMGTPEZY';
+  $b = log((float)$n, 1024);
+  $fb = floor($b);
+  return round(pow(1024,$b-$fb),$precision).@$units[$fb];
 }
 
 ## AsSpaced converts a string with WikiWords into a spaced version
@@ -765,7 +827,7 @@ function ResolvePageName($pagename) {
   $p = MakePageName($DefaultPage, $pagename);
   if (!preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $p)) {
     header('HTTP/1.1 404 Not Found');
-    Abort('$[?invalid page name]');
+    Abort("\$[?invalid page name] \"$p\"");
   }
   if (preg_match("/^($GroupPattern)[.\\/]($NamePattern)$/i", $pagename))
     return $p;
@@ -785,9 +847,9 @@ function MakePageName($basepage, $str) {
   if (@$MakePageNameFunction) return $MakePageNameFunction($basepage, $str);
   SDV($PageNameChars,'-[:alnum:]');
   SDV($MakePageNamePatterns, array(
-    "/'/" => '',			   # strip single-quotes
-    "/[^$PageNameChars]+/" => ' ',         # convert everything else to space
-    '/((^|[^-\\w])\\w)/' => 'cb_toupper',
+    "/'/" => '',                      # strip single-quotes
+    "/[^$PageNameChars]+/" => ' ',    # convert everything else to space
+    '/((^|[^-\\w])\\w)/' => 'cb_toupper', # CamelCase
     '/ /' => ''));
   SDV($MakePageNameSplitPattern, '/[.\\/]/');
   $str = preg_replace('/[#?].*$/', '', $str);
@@ -887,7 +949,7 @@ function PageTextVar($pagename, $var) {
     }
     SDV($PCache[$pagename]["=p_$var"], ''); # to avoid re-loop
   }
-  elseif ($PCache[$pagename]["=p_$var"] == '' && is_array($DefaultEmptyPageTextVars)) {
+  elseif (@$PCache[$pagename]["=p_$var"] == '' && is_array($DefaultEmptyPageTextVars)) {
     foreach($DefaultEmptyPageTextVars as $k=>$v) {
       if (count(MatchNames($var, $k))) {
         $PCache[$pagename]["=p_$var"] = $v;
@@ -929,7 +991,6 @@ function PageVar($pagename, $var, $pn = '') {
   return '';
 }
 
-  
 ## FmtPageName handles $[internationalization] and $Variable 
 ## substitutions in strings based on the $pagename argument.
 function FmtPageName($fmt, $pagename) {
@@ -970,7 +1031,7 @@ function FmtPageName($fmt, $pagename) {
           "cb_expandfmtv", $fmt);
   return $fmt;
 }
-function cb_expandglobal($m){ return $GLOBALS[$m[1]]; }
+function cb_expandglobal($m){ return @$GLOBALS[$m[1]]; }
 function cb_expandxlang ($m){ return NoCache(XL($m[1])); }
 function cb_expandfmtv ($m){ 
   return isset($GLOBALS['FmtV'][$m[1]]) ? $GLOBALS['FmtV'][$m[1]] : $m[1];
@@ -982,7 +1043,7 @@ function cb_expandscripturl($m) {
 }
 
 
-## FmtPageTitle returns the page title, or the page name
+## FmtPageTitle returns the page title, or the page name.
 ## It localizes standard technical pages (RecentChanges...)
 function FmtPageTitle($title, $name, $spaced=0) {
   if ($title>'') return str_replace("$", "&#036;", $title);
@@ -999,8 +1060,8 @@ function FmtPageTitle($title, $name, $spaced=0) {
   return ($spaced || $SpaceWikiWords) ? $AsSpacedFunction($name) : $name;
 }
 
-##  FmtTemplateVars uses $vars to replace all occurrences of 
-##  {$$key} in $text with $vars['key'].
+## FmtTemplateVars uses $vars to replace all occurrences of 
+## {$$key} in $text with $vars['key'].
 function FmtTemplateVars($text, $vars, $pagename = NULL) {
   global $FmtPV, $EnableUndefinedTemplateVars;
   if ($pagename) {
@@ -1125,7 +1186,7 @@ class PageStore {
     if ($pagefile && ($fp=@fopen($pagefile, "r"))) {
       $page = $this->attr;
       while (!feof($fp)) {
-        $line = fgets($fp, 4096);
+        $line = @fgets($fp, 4096);
         while (substr($line, -1, 1) != "\n" && !feof($fp)) 
           { $line .= fgets($fp, 4096); }
         $line = rtrim($line);
@@ -1492,7 +1553,7 @@ function IncludeText($pagename, $inclspec) {
         $ipage = RetrieveAuthPage($iname, 'read', false, READPAGE_CURRENT);
         $itext = IsEnabled($PCache[$iname]['=preview'], @$ipage['text']);
       }
-      $itext = TextSection($itext, $v, array('anchors' => 1));
+      $itext = TextSection(@$itext, $v, array('anchors' => 1));
       continue;
     }
     if (preg_match('/^(?:line|para)s?$/', $k)) {
@@ -1508,9 +1569,9 @@ function IncludeText($pagename, $inclspec) {
   }
   $basepage = isset($args['basepage']) 
               ? MakePageName($pagename, $args['basepage'])
-              : $iname;
+              : @$iname;
   if ($basepage) $itext = Qualify(@$basepage, @$itext);
-  return FmtTemplateVars(PVSE($itext), $args);
+  return FmtTemplateVars(PVSE(@$itext), $args);
 }
 
 
@@ -1551,13 +1612,13 @@ function Block($b) {
   }
   @list($code, $depth, $icol) = explode(',', $b);
   if (!$code) $depth = 1;
-  if ($depth == 0) $depth = strlen($depth);
-  if ($icol == 0) $icol = strlen($icol);
+  if (!is_numeric($depth)) $depth = strlen($depth); # PHP8
+  if (!is_numeric($icol)) $icol = strlen($icol); # PHP8
   if ($depth > 0) $depth += @$mf['idep'];
   if ($icol > 0) $mf['is'][$depth] = $icol + @$mf['icol'];
   @$mf['idep'] = @$mf['icol'] = 0;
   while (count($cs)>$depth) 
-    { $c = array_pop($cs); $out .= $BlockMarkups[$c][2]; }
+    { $c = array_pop($cs); $out .= @$BlockMarkups[$c][2]; }
   if (!$code) {
     if (@end($cs) == 'p') { $out .= $HTMLPNewline; $code = 'p'; }
     else if ($depth < 2) { $code = 'p'; $mf['is'][$depth] = 0; }
@@ -1655,7 +1716,7 @@ function LinkIMap($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   }
   $FmtV['$LinkUrl'] = PUE(str_replace('$1',$path,$IMap[$imap]));
   $FmtV['$LinkText'] = $txt;
-  $FmtV['$LinkAlt'] = str_replace(array('"',"'"),array('&#34;','&#39;'),$alt);
+  $FmtV['$LinkAlt'] = Keep(str_replace(array('"',"'"),array('&#34;','&#39;'),$alt));
   if (!$fmt) 
     $fmt = (isset($IMapLinkFmt[$imap])) ? $IMapLinkFmt[$imap] : $UrlLinkFmt;
   if(IsEnabled($AddLinkCSS['samedomain'])) {
@@ -1707,7 +1768,7 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
     $suffix = $txt[1];
     $txt = $txt[0];
   }
-  if (!$fmt && $path[0] == '#') {
+  if (!$fmt && @$path[0] == '#') {
     $path = preg_replace("/[^-.:\\w]/", '', $path);
     if (trim($txt) == '+') $txt = PageVar($pagename, '$Title') . @$suffix;
     if ($alt) $alt = " title='$alt'";
@@ -1734,7 +1795,7 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
   if (@$EnableLinkPageRelative)
     $url = preg_replace('!^[a-z]+://[^/]*!i', '', $url);
   $fmt = str_replace(array('$LinkUrl', '$LinkText', '$LinkAlt'),
-                     array($url.PUE($qf), $txt, $alt), $fmt);
+                     array($url.PUE($qf), $txt, Keep($alt)), $fmt);
   if(IsEnabled($AddLinkCSS['othergroup'])) {
     list($cgroup, ) = explode('.', $pagename);
     list($tgroup, ) = explode('.', $tgtname);
@@ -1747,18 +1808,20 @@ function LinkPage($pagename,$imap,$path,$alt,$txt,$fmt=NULL) {
 function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
   global $LinkPattern,$LinkFunctions,$UrlExcludeChars,$ImgExtPattern,$ImgTagFmt,
     $LinkTitleFunction;
+  if(preg_match("/^(.*)(?:\"(.*)\")\\s*$/",$tgt,$x)) list(,$tgt,$title) = $x;
   $t = preg_replace('/[()]/','',trim($tgt));
   $t = preg_replace('/<[^>]*>/','',$t);
-  preg_match("/^($LinkPattern)?(.+?)(\"(.*)\")?$/",$t,$m);
-  if (!$m[1]) $m[1]='<:page>';
-  if (preg_match("/\"(.*)\"$/",trim($tgt),$x)) $m[4]=$x[1];
-  if (preg_match("/(($LinkPattern)([^$UrlExcludeChars]+$ImgExtPattern))(\"(.*)\")?$/",$txt,$tm)) 
+  $t = trim(MarkupRestore($t));
+  $txtr = trim(MarkupRestore($txt));
+  
+  preg_match("/^($LinkPattern)?(.+)$/",$t,$m);
+  if (!@$m[1]) $m[1]='<:page>';
+  if (preg_match("/(($LinkPattern)([^$UrlExcludeChars]+$ImgExtPattern))(\"(.*)\")?$/",$txtr,$tm)) 
     $txt = $LinkFunctions[$tm[2]]($pagename,$tm[2],$tm[3],@$tm[5],
       $tm[1],$ImgTagFmt);
   else {
     if (is_null($txt)) {
       $txt = preg_replace('/\\([^)]*\\)/','',$tgt);
-      if (@$m[3]) $txt = preg_replace('/"(.*)"(\\s*)$/','$2',$txt);
       if ($m[1]=='<:page>') {
         $txt = preg_replace('!/\\s*$!', '', $txt);
         $txt = preg_replace('!^.*[^<]/!', '', $txt);
@@ -1769,11 +1832,11 @@ function MakeLink($pagename,$tgt,$txt=NULL,$suffix=NULL,$fmt=NULL) {
     }
     else $txt .= $suffix;
   }
-  if (@$LinkTitleFunction) $m[4] = $LinkTitleFunction($pagename,$m,$txt);
-  $out = $LinkFunctions[$m[1]]($pagename,$m[1],$m[2],@$m[4],$txt,$fmt);
-  return preg_replace('/(<[^>]+) title=(""|\'\')/', '$1', $out);
+  if (@$LinkTitleFunction) $title = $LinkTitleFunction($pagename,$m,$txt);
+  else $title = PHSC(MarkupRestore(@$title), ENT_QUOTES);
+  $out = $LinkFunctions[$m[1]]($pagename,$m[1],@$m[2],@$title,$txt,$fmt);
+  return preg_replace('/(<[^>]+)\\stitle=(""|\'\')/', '$1', $out);
 }
-
 
 function Markup($id, $when, $pat=NULL, $rep=NULL, $tracelev=0) {
   global $MarkupTable, $EnableMarkupDiag;
@@ -1861,10 +1924,10 @@ function MarkupToHTML($pagename, $text, $opt = NULL) {
       $MarkupToHTML['markupid'] = $id;
       if ($p[0] == '/') {
         if (is_callable($r)) $x = preg_replace_callback($p,$r,$x);
-        else $x=preg_replace($p,$r,$x);
+        else $x=preg_replace($p,$r,$x); # simple text OR called by old addon|skin|recipe needing update, see pmwiki.org/Troubleshooting
       }
       elseif (strstr($x,$p)!==false) $x=eval($r);
-      if (isset($php_errormsg)) 
+      if (isset($php_errormsg)) ### TODO: $php_errormsg removed since PHP 8
         { echo "ERROR: pat=$p $php_errormsg"; unset($php_errormsg); }
       if ($RedoMarkupLine) { $lines=array_merge((array)$x,$lines); continue 2; }
     }
@@ -1947,6 +2010,38 @@ function UpdatePage(&$pagename, &$page, &$new, $fnlist = NULL) {
   return $IsPagePosted;
 }
 
+# AutoCheckToken verifies if the posted content was sent
+# from the website forms, to prevent CSRF
+function AutoCheckToken() {
+  # TODO: Work in progress (Jan 2021), releasing for 
+  return true;
+    
+  global $EnablePost, $AutoCheckTokenActions, $EnablePmToken, 
+    $FmtV, $action, $BlockMessageFmt, $MessagesFmt;
+  
+  # a quick way to disable tokens
+  if(! IsEnabled($EnablePmToken, 1)) return true; 
+  
+  SDVA($AutoCheckTokenActions, array( # 1=POST, 2=GET, 0=disabled
+    'edit' => 1, 
+    'postattr' => 1,
+    'postupload' => 1,
+    'approvesites' => 2,
+    'approveurls' => 2,
+  ));
+  $tname = $FmtV['$TokenName'];
+  $x = @$AutoCheckTokenActions[$action];
+  if (!$x) return true;
+  elseif ($x==1) {
+    if ( count($_POST) < 1 || pmtoken(''.@$_POST[$tname]) ) return true;
+  }
+  elseif($x==2 && pmtoken(''.@$_GET[$tname])) return true;
+  
+  $EnablePost = 0;
+  $MessagesFmt[] = $BlockMessageFmt;
+  $MessagesFmt[] = XL('Token invalid or missing.');
+  return false;
+}
 
 # EditTemplate allows a site administrator to pre-populate new pages
 # with the contents of another page.
@@ -2085,12 +2180,10 @@ function PostRecentChanges($pagename,$page,$new,$Fmt=null) {
     $pgtext = FmtPageName($pgfmt,$pagename);  if (!$pgtext) continue;
     if (@$seen[$rcname]++) continue;
 
-    if (IsEnabled($EnableRCDiffBytes, 0) && isset($new['text'])) {
-      $bytes = strlen($new['text']) - strlen($page['text']);
-      if ($bytes>0) $bytes = "{+(+$bytes)+}";
-      elseif ($bytes==0) $bytes = "{+(&#177;$bytes)+}";
-      else $bytes = "{-($bytes)-}";
-      $pgtext .= " %diffmarkup%$bytes%%";
+    if (IsEnabled($EnableRCDiffBytes, 0)) {
+      $pgtext = PPRA(array(
+        '/\\(([+-])(\\d+)\\)(\\s*=\\]\\s*)$/'=>'$3%diffmarkup%{$1($1$2)$1}%%', 
+        '/\\(\\+(0\\)\\+\\}%%)$/'=>'(&#177;$1'), $pgtext);
     }
     $rcpage = ReadPage($rcname);
     $rcelim = preg_quote(preg_replace("/$RCDelimPattern.*$/",' ',$pgtext),'/');
@@ -2131,8 +2224,8 @@ function PreviewPage($pagename,&$page,&$new) {
 }
 
 function HandleEdit($pagename, $auth = 'edit') {
-  global $IsPagePosted, $EditFields, $ChangeSummary, $EditFunctions, 
-    $EnablePost, $FmtV, $Now, $EditRedirectFmt, 
+  global $IsPagePosted, $EditFields, $ChangeSummary, $EditFunctions,
+    $EnablePost, $FmtV, $Now, $EditRedirectFmt, $EnableRCDiffBytes, 
     $PageEditForm, $HandleEditFmt, $PageStartFmt, $PageEditFmt, $PageEndFmt;
   SDV($EditRedirectFmt, '$FullName');
   if (@$_POST['cancel']) 
@@ -2143,9 +2236,15 @@ function HandleEdit($pagename, $auth = 'edit') {
   $new = $page;
   foreach((array)$EditFields as $k) 
     if (isset($_POST[$k])) $new[$k]=str_replace("\r",'',stripmagic($_POST[$k]));
+    
+  if (IsEnabled($EnableRCDiffBytes, 0) && isset($new['text'])) {
+    $bytes = strlen($new['text']) - strlen(@$page['text']);
+    if ($bytes>=0) $bytes = "+$bytes";
+    $ChangeSummary = rtrim($ChangeSummary) . " ($bytes)";
+  }
   $new['csum'] = $ChangeSummary;
   if ($ChangeSummary) $new["csum:$Now"] = $ChangeSummary;
-  $EnablePost &= preg_grep('/^post/', array_keys(@$_POST));
+  $EnablePost &= (bool)preg_grep('/^post/', array_keys(@$_POST));
   $new['=preview'] = @$new['text'];
   PCache($pagename, $new);
   UpdatePage($pagename, $page, $new);
@@ -2157,6 +2256,7 @@ function HandleEdit($pagename, $auth = 'edit') {
   $FmtV['$EditText'] = 
     str_replace('$','&#036;',PHSC(@$new['text'],ENT_NOQUOTES));
   $FmtV['$EditBaseTime'] = $Now;
+  $FmtV['$TokenValue'] = pmtoken();
   if (@$PageEditForm) {
     $efpage = FmtPageName($PageEditForm, $pagename);
     $form = RetrieveAuthPage($efpage, 'read', false, READPAGE_CURRENT);
@@ -2170,6 +2270,7 @@ function HandleEdit($pagename, $auth = 'edit') {
     <input type='hidden' name='action' value='edit' />
     <input type='hidden' name='n' value='\$FullName' />
     <input type='hidden' name='basetime' value='\$EditBaseTime' />
+    <input type='hidden' name='\$TokenName' value='\$TokenValue' />
     \$EditMessageFmt
     <textarea id='text' name='text' rows='25' cols='60'
       onkeydown='if (event.keyCode==27) event.returnValue=false;'
@@ -2320,7 +2421,7 @@ function IsAuthorized($chal, $source, &$from) {
 ## as needed.
 function SessionAuth($pagename, $auth = NULL) {
   global $AuthId, $AuthList, $AuthPw, $SessionEncode, $SessionDecode,
-    $EnableSessionPasswords;
+    $EnableSessionPasswords, $EnableAuthPostRegenerateSID;
   static $called;
 
   @$called++;
@@ -2329,6 +2430,11 @@ function SessionAuth($pagename, $auth = NULL) {
 
   $sid = session_id();
   @session_start();
+  if($called == 1 && isset($_POST['authpw']) && $_POST['authpw']
+    && IsEnabled($EnableAuthPostRegenerateSID, true)) {
+    session_regenerate_id();
+  }
+  
   foreach((array)$auth as $k => $v) {
     if ($k == 'authpw') {
       foreach((array)$v as $pw => $pv) {
@@ -2339,7 +2445,7 @@ function SessionAuth($pagename, $auth = NULL) {
     else if ($k) $_SESSION[$k] = (array)$v + (array)@$_SESSION[$k];
   }
 
-  if (!isset($AuthId)) $AuthId = @end($_SESSION['authid']);
+  if (!isset($AuthId)) $AuthId = @$_SESSION['authid'] ? @end($_SESSION['authid']) : '';
   $AuthPw = array_map($SessionDecode, array_keys((array)@$_SESSION['authpw']));
   if (!IsEnabled($EnableSessionPasswords, 1)) $_SESSION['authpw'] = array();
   $AuthList = array_merge($AuthList, (array)@$_SESSION['authlist']);
@@ -2375,8 +2481,10 @@ function PasswdVar($pagename, $level) {
 
 function PrintAttrForm($pagename) {
   global $PageAttributes, $PCache, $FmtV;
+  $FmtV['$TokenValue'] = pmtoken();
   echo FmtPageName("<form action='\$PageUrl' method='post'>
     <input type='hidden' name='action' value='postattr' />
+    <input type='hidden' name='\$TokenName' value='\$TokenValue' />
     <input type='hidden' name='n' value='\$FullName' />
     <table>",$pagename);
   $page = $PCache[$pagename];
@@ -2414,6 +2522,9 @@ function HandleAttr($pagename, $auth = 'attr') {
 
 function HandlePostAttr($pagename, $auth = 'attr') {
   global $PageAttributes, $EnablePostAttrClearSession;
+  if(! AutoCheckToken()) {
+    Abort('? $[Token invalid or missing.]');
+  }
   Lock(2);
   $page = RetrieveAuthPage($pagename, $auth, true);
   if (!$page) { Abort("?unable to read $pagename"); }

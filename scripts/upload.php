@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2019 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2021 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -25,10 +25,11 @@ SDV($EnableUploadOverwrite,1);
 ## accept, along with the Content-Type: value appropriate for each.
 SDVA($UploadExts,array(
   'gif' => 'image/gif', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
-  'png' => 'image/png', 'bmp' => 'image/bmp', 'ico' => 'image/x-icon',
-  'wbmp'=> 'image/vnd.wap.wbmp', 'svg' => 'image/svg+xml', 'svgz' => 'image/svg+xml', 'xcf' => 'image/x-xcf',
+  'png' => 'image/png', 'apng' => 'image/apng', 'bmp' => 'image/bmp', 'ico' => 'image/x-icon',
+  'wbmp'=> 'image/vnd.wap.wbmp', 'xcf' => 'image/x-xcf', 'webp' => 'image/webp',
+  'svg' => 'image/svg+xml', 'svgz' => 'image/svg+xml',
   'mp3' => 'audio/mpeg', 'au' => 'audio/basic', 'wav' => 'audio/x-wav',
-  'ogg' => 'audio/ogg', 'flac' => 'audio/x-flac',
+  'ogg' => 'audio/ogg', 'flac' => 'audio/x-flac', 'opus' => 'audio/opus', 
   'ogv' => 'video/ogg', 'mp4' => 'video/mp4', 'webm' => 'video/webm',
   'mpg' => 'video/mpeg', 'mpeg' => 'video/mpeg', 'mkv' => 'video/x-matroska',
   'm4v' => 'video/x-m4v', '3gp' => 'video/3gpp',
@@ -92,6 +93,7 @@ SDV($PageUploadFmt,array("
   <form enctype='multipart/form-data' action='{\$PageUrl}?action=postupload' method='post'>
   <input type='hidden' name='n' value='{\$FullName}' />
   <input type='hidden' name='action' value='postupload' />
+  <input type='hidden' name='\$TokenName' value='\$TokenValue' />
   <table border='0'>
     <tr><td align='right'>$[File to upload:]</td><td><input
       name='uploadfile' type='file' required='required' /></td></tr>
@@ -105,6 +107,7 @@ SDV($PageUploadFmt,array("
   'wiki:$[{$SiteGroup}/UploadQuickReference]'));
 XLSDV('en',array(
   'ULsuccess' => 'successfully uploaded',
+  'ULinvalidtoken' => 'Token invalid or missing.',
   'ULauthorrequired' => 'An author name is required.',
   'ULbadname' => 'invalid attachment name',
   'ULbadtype' => '\'$upext\' is not an allowed file extension',
@@ -195,6 +198,7 @@ function UploadSetVars($pagename) {
   $uprname = PHSC(@$_REQUEST['uprname']);
   $FmtV['$upext'] = PHSC(@$_REQUEST['upext']);
   $FmtV['$upmax'] = PHSC(@$_REQUEST['upmax']);
+  $FmtV['$TokenValue'] = pmtoken();
   $FmtV['$UploadResult'] = ($upresult) ?
     FmtPageName("<i>$uprname</i>: $[UL$upresult]",$pagename) : 
       (@$EnableReadOnly ? XL('Cannot modify site -- $EnableReadOnly is set'): '');
@@ -282,7 +286,7 @@ function HandlePostUpload($pagename, $auth = 'upload') {
 
   UploadAuth($pagename, $auth);
   $uploadfile = $_FILES['uploadfile'];
-  $upname = $_REQUEST['upname'];
+  $upname = @$_REQUEST['upname'];
   if ($upname=='') $upname=$uploadfile['name'];
   $upname = MakeUploadName($pagename,$upname);
   if (!function_exists($UploadVerifyFunction))
@@ -310,6 +314,7 @@ function HandlePostUpload($pagename, $auth = 'upload') {
       register_shutdown_function('NotifyUpdate', $pagename, getcwd());
     }
   }
+  $FmtV['$upresult'] = $result;
   SDV($UploadRedirectFunction, 'Redirect');
   $UploadRedirectFunction($pagename,"{\$PageUrl}?action=upload&uprname=$upname&$result");
 }
@@ -319,6 +324,10 @@ function UploadVerifyBasic($pagename,$uploadfile,$filepath) {
     $UploadDirQuota,$UploadDir, $UploadBlacklist,
     $Author, $EnablePostAuthorRequired, $EnableUploadAuthorRequired;
 
+  if(! AutoCheckToken()) {
+    return 'upresult=invalidtoken';
+  }
+  
   if (IsEnabled($EnableUploadAuthorRequired,0) && !$Author)
     return 'upresult=authorrequired';
 

@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2019 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2020 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -326,7 +326,7 @@ function MarkupLinks($m){
       return Keep(MakeLink($pagename,$m[0],$m[1]),'L');
     case 'img': 
       global $LinkFunctions, $ImgTagFmt;
-      return Keep($LinkFunctions[$m[1]]($pagename,$m[1],$m[2],$m[4],$m[1].$m[2],
+      return Keep($LinkFunctions[$m[1]]($pagename,$m[1],$m[2],@$m[4],$m[1].$m[2],
              $ImgTagFmt),'L');
   }
 }
@@ -660,17 +660,17 @@ if ($action!='browse') $PmTOC['Enable'] = 0;
 Markup("PmTOC", 'directives', '/^\\(:[#*]?(?:toc|tdm).*?:\\)\\s*$/im', 'FmtPmTOC');
 Markup("noPmTOC", 'directives', '/\\(:(no)(?:toc|tdm).*?:\\)/im', 'FmtPmTOC');
 function FmtPmTOC($m) {
-  if ($m[1]) return Keep('<span class="noPmTOC"></span>');
+  if (@$m[1]) return Keep('<span class="noPmTOC"></span>');
   return "<:block,1>".Keep("<div class='PmTOCdiv'></div>");
 }
-SDV($HTMLStylesFmt['PmTOC'], '.noPmTOC {display:none;}
+SDV($HTMLStylesFmt['PmTOC'], '.noPmTOC, .PmTOCdiv:empty {display:none;}
 .PmTOCdiv { display: inline-block; font-size: 13px; overflow: auto; max-height: 500px;}
 .PmTOCdiv a { text-decoration: none;}
 .back-arrow {font-size: .9em; text-decoration: none;}
 #PmTOCchk + label {cursor: pointer;}
 #PmTOCchk {display: none;}
-#PmTOCchk:not(:checked) + label > .show {display: none;}
-#PmTOCchk:checked + label > .hide {display: none;}
+#PmTOCchk:not(:checked) + label > .pmtoc-show {display: none;}
+#PmTOCchk:checked + label > .pmtoc-hide {display: none;}
 #PmTOCchk:checked + label + div {display: none;}');
 
 SDV($HTMLStylesFmt['PmSortable'], 'table.sortable th { cursor: pointer; }

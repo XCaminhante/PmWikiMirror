@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2019 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2021 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -101,10 +101,10 @@ function MarkupPageList($m) {
       return FmtPageList('$MatchList', $pagename, array('o' => $m[1].' '));
     case 'searchbox': 
       return SearchBox($pagename, 
-        ParseArgs($m[1], $GLOBALS['PageListArgPattern']));
+        ParseArgs(@$m[1], $GLOBALS['PageListArgPattern']));
     case 'searchresults': 
       return FmtPageList($GLOBALS['SearchResultsFmt'], 
-        $pagename, array('req' => 1, 'request'=>1, 'o' => $m[1]));
+        $pagename, array('req' => 1, 'request'=>1, 'o' => @$m[1]));
   }
 }
 
@@ -249,7 +249,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   SDVA($MakePageListOpt, array('list' => 'default'));
   $opt = array_merge((array)$MakePageListOpt, (array)$opt);
   if (!@$opt['order'] && !@$opt['trail']) $opt['order'] = 'name';
-  $opt['order'] = preg_replace('/[^-\\w:$]+/', ',', $opt['order']);
+  $opt['order'] = preg_replace('/[^-\\w:$]+/', ',', @$opt['order']);
 
   ksort($opt); $opt['=key'] = md5(serialize($opt));
 
@@ -517,7 +517,8 @@ function PageListSort(&$list, &$opt, $pn, &$page) {
       $PCache[$pn][$o] = PageVar($pn, $o);
   foreach($PageListSortCmp as $o=>$f)
     if(! is_callable($f)) # DEPRECATED
-      $PageListSortCmp[$o] = create_function('$x,$y', "global \$PCache; return {$f};");
+      $PageListSortCmp[$o] = create_function( # called by old addon needing update, see pmwiki.org/CustomPagelistSortOrder
+        '$x,$y', "global \$PCache; return {$f};");
 
   StopWatch('PageListSort sort');
   if (count($opt['=order'])) {
@@ -880,7 +881,7 @@ function PageIndexQueueUpdate($pagelist) {
     register_shutdown_function('PageIndexUpdate', NULL, getcwd());
   $PageIndexUpdateList = array_merge((array)@$PageIndexUpdateList,
                                      (array)$pagelist);
-  $c1 = @count($pagelist); $c2 = count($PageIndexUpdateList);
+  $c1 = @count((array)$pagelist); $c2 = count($PageIndexUpdateList);
   StopWatch("PageIndexQueueUpdate: queued $c1 pages ($c2 total)");
 }
 

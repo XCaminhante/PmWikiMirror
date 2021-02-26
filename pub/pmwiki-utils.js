@@ -1,7 +1,8 @@
 /*
   JavaScript utilities for PmWiki
-  (c) 2009-2019 Petko Yotov www.pmwiki.org/petko
+  (c) 2009-2021 Petko Yotov www.pmwiki.org/petko
   based on PmWiki addons DeObMail, AutoTOC and Ape
+  licensed GNU GPLv2 or any more recent version.
 
   libsortable() "Sortable tables" adapted for PmWiki from
   a Public Domain event listener by github.com/tofsjonas
@@ -16,13 +17,14 @@
   function dqsa(str) { return document.querySelectorAll(str); }
   function tap(q, fn) { aE(q, 'click', fn); };
   function adata(el, x) { return el.getAttribute("data-"+x); }
+  function sdata(el, x, val) { el.setAttribute("data-"+x, val); }
   function pf(x) {return parseFloat(x);}
 
   var __script__ = dqs('script[src*="pmwiki-utils.js"]');
   var wikitext = document.getElementById('wikitext');
 
   function PmXMail() {
-    var els = wikitext.querySelectorAll('span._pmXmail');
+    var els = document.querySelectorAll('span._pmXmail');
     var LinkFmt = '<a href="%u" class="mail">%t</a>';
 
     for(var i=0; i<els.length; i++) {
@@ -90,6 +92,33 @@
     for(var i=0; i<times; i++) y += '' + x;
     return y;
   }
+  function inittoggle() {
+    var tnext = adata(__script__, 'toggle');
+    if(! tnext) { return; }
+    var x = dqsa(tnext);
+    if(! x.length) return;
+    for(var i=0; i<x.length; i++) togglenext(x[i]);
+    tap(tnext, togglenext);
+    tap('.pmtoggleall', toggleall);
+  }
+  function togglenext(z) {
+    var el = z.type == 'click' ? this : z;
+    var attr = adata(el, 'pmtoggle')=='closed' ? 'open' : 'closed';
+    sdata(el, 'pmtoggle', attr);
+  }
+  function toggleall(){
+    var curr = adata(this, 'pmtoggleall');
+    if(!curr) curr = 'closed';
+    var toggles = dqsa('*[data-pmtoggle="'+curr+'"]');
+    var next = curr=='closed' ? 'open' : 'closed';
+    for(var i=0; i<toggles.length; i++) {
+      sdata(toggles[i], 'pmtoggle', next);
+    }
+    var all = dqsa('.pmtoggleall');
+    for(var i=0; i<all.length; i++) {
+      sdata(all[i], 'pmtoggleall', next);
+    }
+  }
 
   function autotoc() {
     if(dqs('.noPmTOC')) { return; } // (:notoc:) in page
@@ -124,7 +153,7 @@
     if(! toc_headings.length) return;
 
     var tocdiv = dqs('.PmTOCdiv');
-    var shouldmaketoc = ( !tocdiv && toc_headings.length < dtoc.MinNumber ) ? 0:1;
+    var shouldmaketoc = ( tocdiv || (toc_headings.length >= dtoc.MinNumber && dtoc.MinNumber != -1)) ? 1:0;
     if(!dtoc.NumberedHeadings && !shouldmaketoc) return;
 
     for(var i=0; i<toc_headings.length; i++) {
@@ -153,6 +182,12 @@
 
       if(! shouldmaketoc) { continue; }
       var txt = hc[0].textContent.replace(/^\s+|\s+$/g, '').replace(/</g, '&lt;');
+      var sectionedit = hc[0].querySelector('.sectionedit');
+      if(sectionedit) {
+        var selength = sectionedit.textContent.length;
+        txt = txt.slice(0, -selength);
+      }
+      
       html += repeat('&nbsp;', 3*actual_level)
         + '<a href="#'+hc[2]+'">' + txt + '</a><br>\n';
       if(dtoc.EnableBacklinks) hc[0].insertAdjacentHTML('beforeend', ' <a class="back-arrow" href="#_toc">&uarr;</a>');
@@ -163,8 +198,8 @@
 
     html = "<b>"+dtoc.contents+"</b> "
       +"[<input type='checkbox' id='PmTOCchk'><label for='PmTOCchk'>"
-      +"<span class='show'>"+dtoc.show+"</span>"
-      +"<span class='hide'>"+dtoc.hide+"</span></label>]"
+      +"<span class='pmtoc-show'>"+dtoc.show+"</span>"
+      +"<span class='pmtoc-hide'>"+dtoc.hide+"</span></label>]"
       +"<div class='PmTOCtable'>" + html + "</div>";
 
     if(!tocdiv) {
@@ -349,21 +384,22 @@
     if (! pf(adata(__script__, 'highlight'))) return;
     if (typeof hljs == 'undefined') return;
     var x = dqsa('.highlight,.hlt');
-    if (x.length) {
-      for(var i=0; i<x.length; i++) {
-        var pre = Array.prototype.slice.call(x[i].querySelectorAll('pre'));
-        var n = x[i].nextElementSibling;
-        if (n && n.tagName == 'PRE') pre.push(n);
-        for(var j=0; j<pre.length; j++) {
-          pre[j].className += ' ' + x[i].className;
-          hljs.highlightBlock(pre[j]);
-        }
+    
+    for(var i=0; i<x.length; i++) {
+      var pre = Array.prototype.slice.call(x[i].querySelectorAll('pre,code'));
+      var n = x[i].nextElementSibling;
+      if (n && n.tagName == 'PRE') pre.push(n);
+      for(var j=0; j<pre.length; j++) {
+        pre[j].className += ' ' + x[i].className;
+        hljs.highlightBlock(pre[j]);
       }
     }
+    
   }
 
   function ready(){
     PmXMail();
+    inittoggle();
     autotoc();
     makesortable();
     highlight_pre();
