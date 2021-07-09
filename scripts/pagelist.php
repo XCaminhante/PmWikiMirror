@@ -33,6 +33,7 @@ if (IsEnabled($EnablePageIndex, 1)) {
 }
 
 SDV($StrFoldFunction, 'strtolower');
+SDV($PageIndexFoldFunction, $StrFoldFunction);
 SDV($PageListSortCmpFunction, 'strcasecmp');
 
 ## $SearchPatterns holds patterns for list= option
@@ -235,7 +236,7 @@ function FmtPageList($outfmt, $pagename, $opt) {
   $FmtV['$MatchCount'] = count($matches);
   if ($outfmt != '$MatchList')
     { $FmtV['$MatchList'] = $out; $out = FmtPageName($outfmt, $pagename); }
-  if ($out[0] == '<') $out = Keep($out);
+  if (@$out[0] == '<') $out = Keep($out);
   return PRR($out);
 }
 
@@ -283,7 +284,7 @@ function MakePageList($pagename, $opt, $retpages = 1) {
   
   if ($retpages) 
     for($i=0; $i<count($list); $i++)
-      $list[$i] = &$PCache[$list[$i]];
+      $list[$i] = &$PCache[@$list[$i]];
   StopWatch('MakePageList end');
   return $list;
 }
@@ -804,11 +805,11 @@ function FPLExpandItemVars($item, $matches, $idx, $psvars) {
 ## normalized list of associated search terms.  This reduces the
 ## size of the index and speeds up searches.
 function PageIndexTerms($terms) {
-  global $StrFoldFunction;
+  global $PageIndexFoldFunction;
   $w = array();
   foreach((array)$terms as $t) {
     $w = array_merge($w, preg_split('/[^\\w\\x80-\\xff]+/', 
-           $StrFoldFunction($t), -1, PREG_SPLIT_NO_EMPTY));
+           $PageIndexFoldFunction($t), -1, PREG_SPLIT_NO_EMPTY));
   }
  return $w;
 }
