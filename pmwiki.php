@@ -233,8 +233,6 @@ $Conditions['name'] =
   "(boolean)MatchPageNames(\$pagename, FixGlob(\$condparm, '$1*.$2'))";
 $Conditions['match'] = 'preg_match("!$condparm!",$pagename)';
 $Conditions['authid'] = 'NoCache(@$GLOBALS["AuthId"] > "")';
-$Conditions['exists'] = "(boolean)ListPages(FixGlob(
-  str_replace(array('[[',']]'), array('', ''), \$condparm) , '$1*.$2'))";
 $Conditions['equal'] = 'CompareArgs($condparm) == 0';
 function CompareArgs($arg) 
   { $arg = ParseArgs($arg); return strcmp(@$arg[''][0], @$arg[''][1]); }
@@ -246,6 +244,16 @@ function CondAuth($pagename, $condparm) {
   $pn = ($pn > '') ? MakePageName($pagename, $pn) : $pagename;
   if (@$HandleAuth[$level]>'') $level = $HandleAuth[$level];
   return (boolean)RetrieveAuthPage($pn, $level, false, READPAGE_CURRENT);
+}
+$Conditions['exists'] = 'CondExists($condparm)';
+## This is an optimized version of the earlier conditional
+## especially for pagelists
+function CondExists($condparm, $caseinsensitive = true) {
+  static $ls = false;
+  if(!$ls) $ls = ListPages();
+  $condparm = str_replace(array('[[',']]'), array('', ''), $condparm);
+  $glob = FixGlob($condparm, '$1*.$2');
+  return (boolean)MatchPageNames($ls, $glob, $caseinsensitive);
 }
 
 ## CondExpr handles complex conditions (expressions)
@@ -508,14 +516,21 @@ function PCCF($code, $template = 'default', $args = '$m') {
   return $CallbackFunctions[$code];
 }
 function PPRE($pat, $rep, $x) {
+  if(! function_exists('create_function')) return $x;
   $lambda = PCCF("return $rep;");
   return preg_replace_callback($pat, $lambda, $x);
 }
 function PPRA($array, $x) {
   foreach((array)$array as $pat => $rep) {
+    # skip broken patterns rather than crash the PHP installation
+    $oldpat = preg_match('!^/.+/[^/]*e[^/]*$!', $pat);
+    if($oldpat && PHP_VERSION_ID >= 50500) continue;
+    
     $fmt = $x; # for $FmtP
-    if (is_callable($rep) && $rep != '_') $x = preg_replace_callback($pat,$rep,$x);
-    else $x = preg_replace($pat,$rep,$x);# simple text OR called by old addon|skin|recipe needing update, see pmwiki.org/Troubleshooting
+    if (is_callable($rep) && $rep != '_') 
+      $x = preg_replace_callback($pat,$rep,$x);
+    else
+      $x = preg_replace($pat,$rep,$x);# simple text OR called by old addon|skin|recipe needing update, see pmwiki.org/Troubleshooting
   }
   return $x;
 }
@@ -783,16 +798,17 @@ function FixGlob($x, $rep = '$1*.$2') {
 ## matching the pattern(s) in $pat.  Patterns can be either
 ## regexes to include ('/'), regexes to exclude ('!'), or
 ## wildcard patterns (all others).
-function MatchPageNames($pagelist, $pat) {
+function MatchPageNames($pagelist, $pat, $caseinsensitive = true) {
   # Note: MatchNames() is the generic function matching patterns,
   # works for attachments and other arrays. We can commit to 
   # keep it generic, even if we someday change MatchPageNames().
-  return MatchNames($pagelist, $pat);
+  return MatchNames($pagelist, $pat, $caseinsensitive);
 }
-function MatchNames($list, $pat) {
+function MatchNames($list, $pat, $caseinsensitive = true) {
   global $Charset, $EnableRangeMatchUTF8;
   # allow range matches in utf8; doesn't work on pmwiki.org and possibly elsewhere
   $pcre8 = (IsEnabled($EnableRangeMatchUTF8,0) && $Charset=='UTF-8')? 'u' : '';
+  $insensitive = $caseinsensitive ? 'i' : '';
   $list = (array)$list;
   foreach((array)$pat as $p) {
     if (count($list) < 1) break;
@@ -807,9 +823,9 @@ function MatchNames($list, $pat) {
       default:
         list($inclp, $exclp) = GlobToPCRE(str_replace('/', '.', $p));
         if ($exclp) 
-          $list = array_diff($list, preg_grep("/$exclp/i$pcre8", $list));
+          $list = array_diff($list, preg_grep("/$exclp/$insensitive$pcre8", $list));
         if ($inclp)
-          $list = preg_grep("/$inclp/i$pcre8", $list);
+          $list = preg_grep("/$inclp/$insensitive$pcre8", $list);
     }
   }
   return $list;
@@ -1120,8 +1136,10 @@ function XLPage($lang,$p,$nohtml=false) {
 function CmpPageAttr($a, $b) {
   @list($x, $agmt) = explode(':', $a);
   @list($x, $bgmt) = explode(':', $b);
+  $nagmt = intval($agmt);
+  $nbgmt = intval($bgmt);
   if ($agmt != $bgmt) 
-    return ($agmt==0 || $bgmt==0) ? $agmt - $bgmt : $bgmt - $agmt;
+    return ($nagmt==0 || $nbgmt==0) ? $nagmt - $nbgmt : $nbgmt - $nagmt;
   return strcmp($a, $b);
 }
 
@@ -1200,7 +1218,7 @@ class PageStore {
         }
         if ($k == 'newline') { $newline = $v; continue; }
         if ($since > 0 && preg_match('/:(\\d+)/', $k, $m) && $m[1] < $since) {
-          if ($ordered) break;
+          if (@$ordered) break;
           continue;
         }
         if ($newline) $v = str_replace($newline, "\n", $v);
@@ -1857,10 +1875,15 @@ function Markup($id, $when, $pat=NULL, $rep=NULL, $tracelev=0) {
     }
   }
   if ($pat && !isset($MarkupTable[$id]['pat'])) {
+    $oldpat = preg_match('!(^/.+/[^/]*)e([^/]*)$!', $pat, $mm);
+    if($oldpat && PHP_VERSION_ID >= 50500) {
+      # disable old markup for recent PHP versions
+      $rep = 'ObsoleteMarkup';
+      $pat = $mm[1].$mm[2];
+    }    
     $MarkupTable[$id]['pat'] = $pat;
     $MarkupTable[$id]['rep'] = $rep;
-
-    $oldpat = preg_match('!/[^/]*e[^/]*$!', $pat);
+    
     if (IsEnabled($EnableMarkupDiag, 0) || $oldpat) {
       $exmark = $oldpat ? '!' : ' ';
       if (function_exists('debug_backtrace')) {
@@ -1876,8 +1899,20 @@ function Markup($id, $when, $pat=NULL, $rep=NULL, $tracelev=0) {
 }
 
 function Markup_e($id, $when, $pat, $rep, $template = 'markup_e') {
-  if (!is_callable($rep)) $rep = PCCF($rep, $template);
+  if (!is_callable($rep)) {
+    if(function_exists('create_function'))
+      $rep = PCCF($rep, $template);
+    else $rep = 'ObsoleteMarkup';
+  }
   Markup($id, $when, $pat, $rep, 1);
+}
+
+function ObsoleteMarkup($m) {
+  extract($GLOBALS['MarkupToHTML']);
+  $id = PHSC($markupid, ENT_QUOTES);
+  $txt = PHSC($m[0], ENT_QUOTES);
+  return Keep("<code title='Markup rule &quot;$id&quot; is obsolete and has been disabled. See pmwiki.org/Troubleshooting' 
+    class='obsolete-markup frame'>⚠️$txt</code>");
 }
 
 function DisableMarkup() {
@@ -2178,7 +2213,7 @@ function PostRecentChanges($pagename,$page,$new,$Fmt=null) {
   global $IsPagePosted, $RecentChangesFmt, $RCDelimPattern, $RCLinesMax,
     $EnableRCDiffBytes;
   if (!$IsPagePosted && $Fmt==null) return;
-  if ($Fmt==null) $Fmt = $RecentChangesFmt;
+  if (is_null($Fmt)) $Fmt = $RecentChangesFmt;
   foreach($Fmt as $rcfmt=>$pgfmt) {
     $rcname = FmtPageName($rcfmt,$pagename);  if (!$rcname) continue;
     $pgtext = FmtPageName($pgfmt,$pagename);  if (!$pgtext) continue;
