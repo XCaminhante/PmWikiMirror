@@ -1,5 +1,5 @@
 <?php if (!defined('PmWiki')) exit();
-/*  Copyright 2004-2021 Patrick R. Michaud (pmichaud@pobox.com)
+/*  Copyright 2004-2022 Patrick R. Michaud (pmichaud@pobox.com)
     This file is part of PmWiki; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published
     by the Free Software Foundation; either version 2 of the License, or
@@ -106,6 +106,7 @@ SDV($PageUploadFmt,array("
         </td></tr></table></form></div>",
   'wiki:$[{$SiteGroup}/UploadQuickReference]'));
 XLSDV('en',array(
+  'ULby' => 'uploaded by',
   'ULsuccess' => 'successfully uploaded',
   'ULinvalidtoken' => 'Token invalid or missing.',
   'ULauthorrequired' => 'An author name is required.',
@@ -154,8 +155,9 @@ function MakeUploadName($pagename,$x) {
    return PPRA($MakeUploadNamePatterns, $x);
 }
 
-function LinkUpload($pagename, $imap, $path, $alt, $txt, $fmt=NULL) {
-  global $FmtV, $UploadFileFmt, $LinkUploadCreateFmt,
+##  This helper function returns the public URL for an attached file
+function DownloadUrl($pagename, $path) {
+  global $FmtV, $UploadFileFmt,
     $UploadUrlFmt, $UploadPrefixFmt, $EnableDirectDownload;
   if (preg_match('!^(.*)/([^/]+)$!', $path, $match)) {
     $pagename = MakePageName($pagename, $match[1]);
@@ -166,13 +168,19 @@ function LinkUpload($pagename, $imap, $path, $alt, $txt, $fmt=NULL) {
   $filepath = FmtPageName("$UploadFileFmt/$upname", $pagename);
   $FmtV['$LinkUpload'] =
     FmtPageName("\$PageUrl?action=upload&amp;upname=$encname", $pagename);
-  $FmtV['$LinkText'] = $txt;
-  if (!file_exists($filepath)) 
-    return FmtPageName($LinkUploadCreateFmt, $pagename);
+  if (!file_exists($filepath)) return false;
   $path = PUE(FmtPageName(IsEnabled($EnableDirectDownload, 1) 
-                            ? "$UploadUrlFmt$UploadPrefixFmt/$encname"
-                            : "{\$PageUrl}?action=download&amp;upname=$encname",
-                          $pagename));
+      ? "$UploadUrlFmt$UploadPrefixFmt/$encname"
+      : "{\$PageUrl}?action=download&amp;upname=$encname",
+    $pagename));
+  return $path;
+}
+
+function LinkUpload($pagename, $imap, $path, $alt, $txt, $fmt=NULL) {
+  global $FmtV, $LinkUploadCreateFmt;
+  $FmtV['$LinkText'] = $txt;
+  $path = DownloadUrl($pagename, $path);
+  if(!$path) return FmtPageName($LinkUploadCreateFmt, $pagename);
   return LinkIMap($pagename, $imap, $path, $alt, $txt, $fmt);
 }
 
@@ -275,9 +283,9 @@ function HandleDownload($pagename, $auth = 'read') {
 }
 
 function HandlePostUpload($pagename, $auth = 'upload') {
-  global $UploadVerifyFunction, $UploadFileFmt, $LastModFile, 
-    $EnableUploadVersions, $Now, $RecentUploadsFmt, $FmtV,
-    $NotifyItemUploadFmt, $NotifyItemFmt, $IsUploadPosted,
+  global $UploadVerifyFunction, $UploadFileFmt, $LastModFile, $Now, 
+    $EnableUploadVersions, $EnableRecentUploads, $RecentUploadsFmt,
+    $FmtV, $NotifyItemUploadFmt, $NotifyItemFmt, $IsUploadPosted,
     $UploadRedirectFunction, $UploadPermAdd, $UploadPermSet,
     $EnableReadOnly;
     
@@ -285,9 +293,9 @@ function HandlePostUpload($pagename, $auth = 'upload') {
     Abort('Cannot modify site -- $EnableReadOnly is set', 'readonly');
 
   UploadAuth($pagename, $auth);
-  $uploadfile = $_FILES['uploadfile'];
+  $uploadfile = @$_FILES['uploadfile'];
   $upname = @$_REQUEST['upname'];
-  if ($upname=='') $upname=$uploadfile['name'];
+  if ($upname=='') $upname=strval(@$uploadfile['name']);
   $upname = MakeUploadName($pagename,$upname);
   if (!function_exists($UploadVerifyFunction))
     Abort('?no UploadVerifyFunction available');
@@ -303,8 +311,17 @@ function HandlePostUpload($pagename, $auth = 'upload') {
     fixperms($filepath, $UploadPermAdd, $UploadPermSet);
     if ($LastModFile) { touch($LastModFile); fixperms($LastModFile); }
     $result = "upresult=success";
+    $FmtV['$filepath'] = $filepath;
     $FmtV['$upname'] = $upname;
     $FmtV['$upsize'] = $uploadfile['size'];
+    $FmtV['$upurl'] = DownloadUrl($pagename, $upname);
+    if (IsEnabled($EnableRecentUploads, 0)) {
+      SDV($RecentUploadsFmt, array( # not SDVA
+        '$SiteGroup.AllRecentChanges' => 
+          '* [[(Attach:){$FullName}/$upname]]  . . . $CurrentLocalTime'
+          . ' $[ULby] $AuthorLink ($upsize $[bytes])'
+      ));
+    }
     if (IsEnabled($RecentUploadsFmt, 0)) {
       PostRecentChanges($pagename, '', '', $RecentUploadsFmt);
     }
@@ -343,7 +360,7 @@ function UploadVerifyBasic($pagename,$uploadfile,$filepath) {
   preg_match('/\\.([^.\\/]+)$/',$filepath,$match); $ext=@$match[1];
   $maxsize = $UploadExtSize[$ext];
   if ($maxsize<=0) return "upresult=badtype&upext=$ext";
-  if ($uploadfile['size']>$maxsize) 
+  if (intval(@$uploadfile['size'])>$maxsize) 
     return "upresult=toobigext&upext=$ext&upmax=$maxsize";
   switch (@$uploadfile['error']) {
     case 1: return 'upresult=toobig';
@@ -351,7 +368,7 @@ function UploadVerifyBasic($pagename,$uploadfile,$filepath) {
     case 3: return 'upresult=partial';
     case 4: return 'upresult=nofile';
   }
-  if (!is_uploaded_file($uploadfile['tmp_name'])) return 'upresult=nofile';
+  if (!is_uploaded_file(strval(@$uploadfile['tmp_name']))) return 'upresult=nofile';
   $filedir = preg_replace('#/[^/]*$#','',$filepath);
   if ($UploadPrefixQuota && 
       (dirsize($filedir)-@filesize($filepath)+$uploadfile['size']) >
@@ -419,7 +436,7 @@ function FmtUploadList($pagename, $args) {
     $lnk = FmtPageName($fmt, $pagename);
     $out[] = "<li> $lnk$overwrite ... ".
       number_format($stat['size']) . " bytes ... " . 
-      strftime($TimeFmt, $stat['mtime']) . "</li>";
+      PSFT($TimeFmt, $stat['mtime']) . "</li>";
   }
   return implode("\n",$out);
 }
