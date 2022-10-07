@@ -15,7 +15,7 @@ SDV($InputAttrs, array('name', 'value', 'id', 'class', 'rows', 'cols',
   'required', 'placeholder', 'autocomplete', 'min', 'max', 'step', 'pattern',
   'role', 'aria-label', 'aria-labelledby', 'aria-describedby',
   'aria-expanded', 'aria-pressed', 'aria-current', 'aria-hidden',
-  'formnovalidate', 'autofocus', 'accept'
+  'lang', 'formnovalidate', 'autofocus', 'accept'
   ));
 
 # Set up formatting for text, submit, hidden, radio, etc. types
@@ -154,6 +154,11 @@ function InputToHTML($pagename, $type, $args, &$opt) {
                          ? $checked : false;
       } else if (!isset($opt['value'])) $opt['value'] = $InputValues[$name];
     }
+    if ( (strpos($name, 'ptv_') === 0) && !isset($opt['value']) ) {
+      # $DefaultUnsetPageTextVars, $DefaultEmptyPageTextVars with wildcards
+      $default = PageTextVar($pagename, substr($name, 4));
+      if ($default !== '') $opt['value'] = $default;
+    }
   }
   ##  build $InputFormContent
   $FmtV['$InputFormContent'] = '';
@@ -258,6 +263,7 @@ function InputDefault($pagename, $type, $args) {
       break;
     }
   }
+  
   return '';
 }
 

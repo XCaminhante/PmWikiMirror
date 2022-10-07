@@ -33,7 +33,10 @@
   }
   var hrx = [ // rule_name, [*=!]classname|function, [container_rx], rx
     ['_begin'],
-    ['external', 'external', /%hlt +([-\w+]+).*?% *\[@([\s\S]*?)@\]/g],
+    ['external', 'external', /%hlt +([-\w+]+) *% *\[@([\s\S]*?)@\]/g],
+    ['external2', 'external', /%hlt +([-\w+]+) *% *@@ *\[=([\s\S]*?)=\] *@@/g],
+    ['pmhlt', 'external', /%(pm)hlt *% *\[@([\s\S]*?)@\]/g],
+    ['pmhlt2', 'external', /%(pm)hlt *% *@@ *\[=([\s\S]*?)=\] *@@/g],
     ['preserve', '=escaped', /\[([@=])[\s\S]*?\1\]/g, /^(\[[@=])([\s\S]*)([@=]\])$/],
     ['joinline', '*bullet', /\\+\n/g],
 
@@ -66,7 +69,7 @@
 
     // urls can have percents so before wikistyle (populated by InterMap)
     ['ttip', '=escaped', /(\[\[)(.*?\S)(?= *(?:\||\]\]))/g,  /(")(.*)(")$/ ], // tooltop
-    ['link0', '=escaped', /\[\[.*?\S(?= *(?:\||\]\]))/g, /(\()(.*?)(\))/g],// hidden 
+    ['link0', '=escaped', /\[\[.*?\S(?= *(?:\||\]\]))/g, /(\()(.*?)(\))/g],// hidden
     ['_url'],
 
     // wikistyles
@@ -119,7 +122,7 @@
     custom_hrx[ hrx[i][0] ] = [];
     custom_hrx[ '>'+hrx[i][0] ] = [];
   }
-  
+
   function PmHi(text){
     var KPV = [];
     function Restore(all, n) { return KPV[parseInt(n)]; }
@@ -162,6 +165,8 @@
       return PHSC(attr);
     }
     function external(lang, code) {
+      if(lang.match(/^pm(wiki)?$/i))
+        return keep0(PmHi(code));
       if (! externalLangs
         || lang == 'plaintext'
         || ! lang.match(externalLangs)
@@ -194,7 +199,7 @@
           return text.replace(s, function(a){
             var b = Array.from(arguments).slice(1, -2);
             var j = b[4]? 3:1;
-            
+
             for(var i=1; i<m.length; i++) {
               if(rule[i+1]) b[j] = PmHi1(b[j], [m[i], rule[i+1]]);
             }
@@ -215,7 +220,6 @@
       });
       return text;
     }
-  
     for(var i=0; i<sorted_hrx.length; i++) {
       var rule = sorted_hrx[i];
       if(rule.length<2)  continue; // _begin, _end
@@ -223,15 +227,17 @@
     }
     return text;
   }
-  
+
   function PmHiEl(el){
     el.innerHTML = PmHi(el.textContent);
     el.classList.add('pmhlt');
   }
 
   function PmHiAll(){
+    var hlt = dqsa('.hlt.pm, .hlt.pmwiki, .highlight.pm, .highlight.pmwiki');
+    for(var i=0; i< hlt.length; i++) hlt[i].className = 'pmhlt';
     var pm = dqsa('table.markup td.markup1 > pre, '
-      + '.hlt.pmwiki pre, .hlt.pmwiki + pre, .pmhlt pre, .pmhlt + pre, .pmhlt code');
+      + '.pmhlt pre, .pmhlt + pre, .pmhlt code, pre.pmhlt, code.pmhlt');
     if(! pm.length) return;
     pm.forEach(PmHiEl);
     tap('.toggle-pmhlt', toggleStyles);
@@ -313,9 +319,11 @@
   }
 
   function initEditForm(){
-    if(!_script || _script.dataset.mode != "2") return;
+    if(!_script || !_script.dataset.mode.match(/^[23]$/)) return;
     var text = dqs('#wikiedit textarea#text');
     if(!text) return;
+               
+    var defaultEnabled = _script.dataset.mode == '3'? 1: 0;
 
     var lastTextContent = false;
     var GUIEditInterval = false;
@@ -374,25 +382,31 @@
       resizePre();
 
       htext.inert = true;
+      htext.style.textAlign =  window.getComputedStyle(text, null).getPropertyValue('text-align');
       text.addEventListener('scroll', textScrolled);
       text.addEventListener('input', updatePre);
       text.addEventListener('dragstart', dragstart);
       text.addEventListener('dragend', dragend);
       GUIEditInterval = setInterval(updatePre, 100); // for GUIEdit buttons
 
-      resizeObserver = new ResizeObserver(resizePre)
+      resizeObserver = new ResizeObserver(resizePre);
       resizeObserver.observe(text);
+    }
+    
+    function storeEnabled(enabled) {
+      if(enabled != defaultEnabled) localStorage.setItem('EnableHighlight', enabled);
+      else localStorage.removeItem('EnableHighlight');
     }
 
     function EnableHighlight() {
       if(chk_hlt.classList.contains('pmhlt')) {
-        localStorage.setItem('EnableHighlight', 1);
+        storeEnabled(1);
         updatePre();
         resizePre();
       }
       else {
         lastTextContent = false;
-        localStorage.removeItem('EnableHighlight');
+        storeEnabled(0);
       }
     }
 
@@ -405,7 +419,7 @@
         + '</code>');
 
       initPre();
-      var enabled = localStorage.getItem('EnableHighlight');
+      var enabled = parseInt(localStorage.getItem('EnableHighlight') || defaultEnabled);
       if(enabled) {
         chk_hlt.classList.add('pmhlt');
         EnableHighlight();
@@ -429,7 +443,7 @@
     }
     externalLangs = new RegExp('^('+aliases.join('|').replace(/[+]/g, '\\+')+')$', 'i');
   }
-  
+
   document.addEventListener('DOMContentLoaded', function(){
     sortRX();
     initExtLangs();
@@ -437,6 +451,4 @@
     initEditForm();
   });
 })();
-
-
 

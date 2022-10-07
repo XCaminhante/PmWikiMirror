@@ -34,6 +34,7 @@ if (IsEnabled($EnablePageIndex, 1)) {
 
 SDV($StrFoldFunction, 'strtolower');
 SDV($PageIndexFoldFunction, $StrFoldFunction);
+SDV($PageIndexTermsFunction, 'PageIndexTerms');
 SDV($PageListSortCmpFunction, 'strcasecmp');
 
 ## $SearchPatterns holds patterns for list= option
@@ -155,6 +156,7 @@ function SearchBox($pagename, $opt) {
   if (isset($SearchBoxFmt)) return Keep(FmtPageName($SearchBoxFmt, $pagename));
   SDVA($SearchBoxOpt, array('size' => '40', 
     'label' => FmtPageName('$[Search]', $pagename),
+    'placeholder' => FmtPageName('$[Search]', $pagename),
     'value' => str_replace("'", "&#039;", $SearchQuery)));
   $opt = array_merge((array)$SearchBoxOpt, @$_GET, (array)$opt);
   $opt['action'] = 'search';
@@ -165,7 +167,7 @@ function SearchBox($pagename, $opt) {
                      $target);
   foreach($opt as $k => $v) {
     if ($v == '' || is_array($v)) continue;
-    $v = str_replace("'", "&#039;", $v);
+    $v = PHSC($v, ENT_QUOTES);
     $opt[$k] = $v;
     if(preg_match('/^(q|label|value|size|placeholder|aria-\\w+)$/', $k)) continue;
     $k = str_replace("'", "&#039;", $k);
@@ -175,8 +177,9 @@ function SearchBox($pagename, $opt) {
   $out .= "<input type='$SearchBoxInputType' name='q' value='{$opt['value']}' ";
   $attrs = preg_grep('/^(placeholder|aria-\\w+)/', array_keys($opt));
   foreach ($attrs as $k) $out .= "  $k='{$opt[$k]}' ";
-  $out .= "  class='inputbox searchbox' size='{$opt['size']}' /><input type='submit' 
-    class='inputbutton searchbutton' value='{$opt['label']}' />";
+  $out .= "  class='inputbox searchbox' size='{$opt['size']}' />";
+  if($opt['label']) 
+    $out .= "<input type='submit' class='inputbutton searchbutton' value='{$opt['label']}' />";
   return '<form '.Keep($out).'</form>';
 }
 
@@ -388,7 +391,7 @@ function PageListIf(&$list, &$opt, $pn, &$page) {
 }
 
 function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
-  global $FmtV;
+  global $PageIndexTermsFunction, $FmtV;
   static $reindex = array();
   $fold = $GLOBALS['StrFoldFunction'];
 
@@ -400,7 +403,7 @@ function PageListTermsTargets(&$list, &$opt, $pn, &$page) {
       foreach((array)@$opt['+'] as $i) { $incl[] = $fold($i); }
       foreach((array)@$opt['-'] as $i) { $excl[] = $fold($i); }
 
-      $indexterms = PageIndexTerms($incl);
+      $indexterms = $PageIndexTermsFunction($incl);
       foreach($incl as $i) {
         $delim = (!preg_match('/[^\\w\\x80-\\xff]/', $i)) ? '$' : '/';
         $opt['=inclp'][] = $delim . preg_quote($i,$delim) . $delim . 'i';
@@ -652,11 +655,13 @@ function HandleSearchA($pagename, $level = 'read') {
 function CalcRange($range, $n) {
   if ($n < 1) return array(0, 0);
   if (strpos($range, '..') === false) {
+    $range = intval($range);
     if ($range > 0) return array(1, min($range, $n));
     if ($range < 0) return array(max($n + $range + 1, 1), $n);
     return array(1, $n);
   }
   list($r0, $r1) = explode('..', $range);
+  $r0 = intval($r0); $r1 = intval($r1);
   if ($r0 < 0) $r0 += $n + 1;
   if ($r1 < 0) $r1 += $n + 1;
   else if ($r1 == 0) $r1 = $n;
@@ -867,7 +872,7 @@ function PageIndexTerms($terms) {
 ## on us).
 function PageIndexUpdate($pagelist = NULL, $dir = '') {
   global $EnableReadOnly, $PageIndexUpdateList, $PageIndexFile, 
-    $PageIndexTime, $Now;
+    $PageIndexTermsFunction, $PageIndexTime, $Now;
   if (IsEnabled($EnableReadOnly, 0)) return;
   $abort = ignore_user_abort(true);
   if ($dir) { flush(); chdir($dir); }
@@ -888,8 +893,8 @@ function PageIndexUpdate($pagelist = NULL, $dir = '') {
     if (time() > $timeout) continue;
     $page = ReadPage($pn, READPAGE_CURRENT);
     if ($page) {
-      $targets = str_replace(',', ' ', @$page['targets']);
-      $terms = PageIndexTerms(array(@$page['text'], $targets, $pn));
+      $targets = str_replace(',', ' ', strval(@$page['targets']));
+      $terms = $PageIndexTermsFunction(array(@$page['text'], $targets, $pn));
       usort($terms, $cmpfn);
       $x = '';
       foreach($terms as $t) { if (strpos($x, $t) === false) $x .= " $t"; }
